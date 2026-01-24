@@ -1,0 +1,397 @@
+"""
+Модуль для работы с базой данных
+Поддерживает PostgreSQL (продакшн) и SQLite (разработка)
+"""
+import os
+import logging
+from pathlib import Path
+from typing import Optional, AsyncGenerator
+from contextlib import asynccontextmanager
+
+# Попытка импортировать asyncpg для PostgreSQL
+try:
+    import asyncpg
+    POSTGRES_AVAILABLE = True
+except ImportError:
+    POSTGRES_AVAILABLE = False
+    logging.warning("asyncpg не установлен, PostgreSQL недоступен")
+
+# SQLite для разработки
+try:
+    import aiosqlite
+    SQLITE_AVAILABLE = True
+except ImportError:
+    SQLITE_AVAILABLE = False
+    logging.warning("aiosqlite не установлен, SQLite недоступен")
+
+logger = logging.getLogger(__name__)
+
+# Глобальные переменные для подключений
+_postgres_pool: Optional[asyncpg.Pool] = None
+_sqlite_path: Optional[str] = None
+_db_type: Optional[str] = None
+
+
+def get_db_type() -> str:
+    """Определяет тип БД для использования"""
+    global _db_type
+    
+    if _db_type:
+        return _db_type
+    
+    # Проверяем переменные окружения для PostgreSQL
+    postgres_url = os.getenv('POSTGRES_URL') or os.getenv('DATABASE_URL')
+    postgres_host = os.getenv('POSTGRES_HOST')
+    
+    # Если есть настройки PostgreSQL и библиотека доступна - используем PostgreSQL
+    if (postgres_url or postgres_host) and POSTGRES_AVAILABLE:
+        try:
+            # Пробуем подключиться к PostgreSQL
+            _db_type = 'postgresql'
+            logger.info("Используется PostgreSQL")
+            return 'postgresql'
+        except Exception as e:
+            logger.warning(f"Не удалось подключиться к PostgreSQL: {e}, используем SQLite")
+    
+    # Иначе используем SQLite
+    if SQLITE_AVAILABLE:
+        _db_type = 'sqlite'
+        logger.info("Используется SQLite (режим разработки)")
+        return 'sqlite'
+    
+    raise RuntimeError("Ни PostgreSQL, ни SQLite не доступны. Установите asyncpg или aiosqlite")
+
+
+async def init_postgres_pool():
+    """Инициализация пула подключений PostgreSQL"""
+    global _postgres_pool
+    
+    if _postgres_pool:
+        return _postgres_pool
+    
+    postgres_url = os.getenv('POSTGRES_URL') or os.getenv('DATABASE_URL')
+    
+    if not postgres_url:
+        # Собираем URL из отдельных параметров
+        host = os.getenv('POSTGRES_HOST', 'localhost')
+        port = int(os.getenv('POSTGRES_PORT', 5432))
+        user = os.getenv('POSTGRES_USER', 'postgres')
+        password = os.getenv('POSTGRES_PASSWORD', '')
+        database = os.getenv('POSTGRES_DB', 'maksum_db')
+        
+        postgres_url = f"postgresql://{user}:{password}@{host}:{port}/{database}"
+    
+    _postgres_pool = await asyncpg.create_pool(
+        postgres_url,
+        min_size=1,
+        max_size=10,
+        command_timeout=60
+    )
+    
+    logger.info("PostgreSQL пул подключений создан")
+    return _postgres_pool
+
+
+async def init_sqlite_db():
+    """Инициализация SQLite базы данных"""
+    global _sqlite_path
+    
+    if _sqlite_path:
+        return _sqlite_path
+    
+    # Определяем путь к БД
+    db_dir = Path(__file__).parent / 'data'
+    db_dir.mkdir(exist_ok=True)
+    _sqlite_path = str(db_dir / 'maksum.db')
+    
+    # Создаем подключение для инициализации
+    async with aiosqlite.connect(_sqlite_path) as db:
+        # Включаем поддержку внешних ключей
+        await db.execute("PRAGMA foreign_keys = ON")
+        await db.commit()
+    
+    logger.info(f"SQLite база данных инициализирована: {_sqlite_path}")
+    return _sqlite_path
+
+
+@asynccontextmanager
+async def get_db():
+    """Получить подключение к БД (async context manager)"""
+    db_type = get_db_type()
+    
+    if db_type == 'postgresql':
+        pool = await init_postgres_pool()
+        async with pool.acquire() as conn:
+            yield conn
+    else:  # sqlite
+        db_path = await init_sqlite_db()
+        async with aiosqlite.connect(db_path) as conn:
+            # Включаем поддержку внешних ключей
+            await conn.execute("PRAGMA foreign_keys = ON")
+            await conn.commit()
+            yield conn
+
+
+async def execute_query(query: str, params: tuple = None):
+    """Выполнить SQL запрос (универсальный для обеих БД)"""
+    db_type = get_db_type()
+    
+    if db_type == 'postgresql':
+        pool = await init_postgres_pool()
+        async with pool.acquire() as conn:
+            if params:
+                return await conn.fetch(query, *params)
+            else:
+                return await conn.fetch(query)
+    else:  # sqlite
+        db_path = await init_sqlite_db()
+        async with aiosqlite.connect(db_path) as conn:
+            await conn.execute("PRAGMA foreign_keys = ON")
+            cursor = await conn.execute(query, params or ())
+            await conn.commit()
+            
+            # Для SELECT запросов возвращаем результаты
+            if query.strip().upper().startswith('SELECT'):
+                rows = await cursor.fetchall()
+                # Преобразуем в список словарей для совместимости
+                columns = [desc[0] for desc in cursor.description] if cursor.description else []
+                return [dict(zip(columns, row)) for row in rows]
+            else:
+                return cursor.lastrowid
+
+
+def convert_sql_to_postgres(sql: str) -> str:
+    """Конвертирует SQL запросы из MySQL/SQLite формата в PostgreSQL"""
+    # Замены для совместимости
+    sql = sql.replace('AUTO_INCREMENT', 'SERIAL')
+    sql = sql.replace('INT AUTO_INCREMENT PRIMARY KEY', 'SERIAL PRIMARY KEY')
+    sql = sql.replace('BIGINT AUTO_INCREMENT PRIMARY KEY', 'BIGSERIAL PRIMARY KEY')
+    sql = sql.replace('DATETIME', 'TIMESTAMP')
+    sql = sql.replace('CURRENT_TIMESTAMP', 'NOW()')
+    sql = sql.replace('ENGINE=InnoDB', '')
+    sql = sql.replace('DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci', '')
+    sql = sql.replace('UNIQUE KEY', 'UNIQUE')
+    sql = sql.replace('INDEX idx_', 'CREATE INDEX IF NOT EXISTS idx_')
+    
+    # Обработка ENUM (PostgreSQL использует CHECK)
+    import re
+    enum_pattern = r"ENUM\('([^']+)'\)"
+    def replace_enum(match):
+        values = match.group(1).split("','")
+        values_str = ', '.join([f"'{v}'" for v in values])
+        return f"VARCHAR(50) CHECK (status IN ({values_str}))"
+    sql = re.sub(enum_pattern, replace_enum, sql)
+    
+    return sql
+
+
+def convert_sql_to_sqlite(sql: str) -> str:
+    """Конвертирует SQL запросы для SQLite"""
+    # SQLite более близок к MySQL, но есть отличия
+    sql = sql.replace('AUTO_INCREMENT', '')
+    sql = sql.replace('INT AUTO_INCREMENT PRIMARY KEY', 'INTEGER PRIMARY KEY AUTOINCREMENT')
+    sql = sql.replace('BIGINT AUTO_INCREMENT PRIMARY KEY', 'INTEGER PRIMARY KEY AUTOINCREMENT')
+    sql = sql.replace('DATETIME', 'DATETIME')
+    sql = sql.replace('ENGINE=InnoDB', '')
+    sql = sql.replace('DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci', '')
+    
+    return sql
+
+
+async def init_db():
+    """Инициализация базы данных - создание таблиц"""
+    db_type = get_db_type()
+    
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            # PostgreSQL таблицы
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    username VARCHAR(255) UNIQUE NOT NULL,
+                    email VARCHAR(255) UNIQUE NOT NULL,
+                    password_hash VARCHAR(255) NOT NULL,
+                    avatar_url VARCHAR(1024) NULL,
+                    theme_mode VARCHAR(20) DEFAULT 'light',
+                    theme_palette VARCHAR(50) DEFAULT 'blue',
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS status_checks (
+                    id VARCHAR(36) PRIMARY KEY,
+                    client_name VARCHAR(255) NOT NULL,
+                    timestamp TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS friendships (
+                    id SERIAL PRIMARY KEY,
+                    requester_id INTEGER NOT NULL,
+                    addressee_id INTEGER NOT NULL,
+                    status VARCHAR(50) NOT NULL DEFAULT 'pending',
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(requester_id, addressee_id),
+                    FOREIGN KEY (requester_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (addressee_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+            
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS conversations (
+                    id SERIAL PRIMARY KEY,
+                    is_group BOOLEAN NOT NULL DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS conversation_participants (
+                    conversation_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    joined_at TIMESTAMP DEFAULT NOW(),
+                    PRIMARY KEY (conversation_id, user_id),
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+            
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS messages (
+                    id SERIAL PRIMARY KEY,
+                    conversation_id INTEGER NOT NULL,
+                    sender_id INTEGER NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                    FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+            
+            # Индексы PostgreSQL
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_friendships_status ON friendships(status)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON messages(conversation_id, created_at)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_status_checks_timestamp ON status_checks(timestamp)")
+            
+            # Триггеры для updated_at
+            await conn.execute("""
+                CREATE OR REPLACE FUNCTION update_updated_at_column()
+                RETURNS TRIGGER AS $$
+                BEGIN
+                    NEW.updated_at = NOW();
+                    RETURN NEW;
+                END;
+                $$ language 'plpgsql';
+            """)
+            
+            await conn.execute("""
+                DROP TRIGGER IF EXISTS update_users_updated_at ON users;
+                CREATE TRIGGER update_users_updated_at
+                BEFORE UPDATE ON users
+                FOR EACH ROW
+                EXECUTE FUNCTION update_updated_at_column();
+            """)
+            
+            await conn.execute("""
+                DROP TRIGGER IF EXISTS update_friendships_updated_at ON friendships;
+                CREATE TRIGGER update_friendships_updated_at
+                BEFORE UPDATE ON friendships
+                FOR EACH ROW
+                EXECUTE FUNCTION update_updated_at_column();
+            """)
+            
+        else:  # SQLite
+            # SQLite таблицы
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username VARCHAR(255) UNIQUE NOT NULL,
+                    email VARCHAR(255) UNIQUE NOT NULL,
+                    password_hash VARCHAR(255) NOT NULL,
+                    avatar_url VARCHAR(1024) NULL,
+                    theme_mode VARCHAR(20) DEFAULT 'light',
+                    theme_palette VARCHAR(50) DEFAULT 'blue',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS status_checks (
+                    id VARCHAR(36) PRIMARY KEY,
+                    client_name VARCHAR(255) NOT NULL,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS friendships (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    requester_id INTEGER NOT NULL,
+                    addressee_id INTEGER NOT NULL,
+                    status VARCHAR(50) NOT NULL DEFAULT 'pending',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(requester_id, addressee_id),
+                    FOREIGN KEY (requester_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (addressee_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+            
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS conversations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    is_group BOOLEAN NOT NULL DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS conversation_participants (
+                    conversation_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (conversation_id, user_id),
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+            
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_id INTEGER NOT NULL,
+                    sender_id INTEGER NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                    FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+            
+            # Индексы SQLite
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_friendships_status ON friendships(status)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON messages(conversation_id, created_at)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_status_checks_timestamp ON status_checks(timestamp)")
+            
+            await conn.commit()
+    
+    logger.info("База данных инициализирована")
+
+
+async def close_db():
+    """Закрыть все подключения к БД"""
+    global _postgres_pool
+    
+    if _postgres_pool:
+        await _postgres_pool.close()
+        _postgres_pool = None
+        logger.info("PostgreSQL пул подключений закрыт")
