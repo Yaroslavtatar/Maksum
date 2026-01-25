@@ -50,6 +50,8 @@ const LoginPage = () => {
       
       if (response.data.access_token) {
         localStorage.setItem('token', response.data.access_token);
+        // Отправляем событие для обновления данных пользователя
+        window.dispatchEvent(new Event('maksum:token-set'));
         setSuccess('Успешный вход! Перенаправление...');
         setTimeout(() => {
           navigate('/');
@@ -111,6 +113,8 @@ const LoginPage = () => {
             
             if (loginResponse.data.access_token) {
               localStorage.setItem('token', loginResponse.data.access_token);
+              // Отправляем событие для обновления данных пользователя
+              window.dispatchEvent(new Event('maksum:token-set'));
               navigate('/');
             }
           } catch (loginErr) {

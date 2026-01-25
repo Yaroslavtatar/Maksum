@@ -39,16 +39,26 @@ const applyTheme = (theme) => {
 };
 
 export const ThemeProvider = ({ children }) => {
+  // Инициализируем тему из localStorage СРАЗУ, чтобы избежать FOUC
   const [theme, setTheme] = useState(() => {
-    // Загружаем из localStorage как fallback
     const saved = localStorage.getItem('maksum-theme');
     if (saved) {
-      return JSON.parse(saved);
+      try {
+        const parsed = JSON.parse(saved);
+        // Применяем тему СРАЗУ при инициализации
+        applyTheme(parsed);
+        return parsed;
+      } catch (e) {
+        console.error('Error parsing theme from localStorage:', e);
+      }
     }
-    return {
-      mode: 'light', // light или dark
-      palette: 'blue' // blue, green, purple для светлой; dark-blue, dark-green, dark-purple для тёмной
+    const defaultTheme = {
+      mode: 'light',
+      palette: 'blue'
     };
+    // Применяем дефолтную тему сразу
+    applyTheme(defaultTheme);
+    return defaultTheme;
   });
   
   const [isLoading, setIsLoading] = useState(true);

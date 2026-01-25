@@ -3,6 +3,7 @@ import "./App.css";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import axios from "axios";
 import { ThemeProvider } from "./hooks/useTheme";
+import { UserProvider } from "./context/UserContext";
 
 // Components
 import LoginPage from "./components/Auth/LoginPage";
@@ -16,7 +17,7 @@ import SettingsPage from "./pages/SettingsPage";
 import UserProfile from "./pages/UserProfile";
 import UsersPage from "./pages/UsersPage";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8001';
 const API = `${BACKEND_URL}/api`;
 
 // Protected Route Component
@@ -65,9 +66,10 @@ function App() {
 
   return (
     <ThemeProvider>
-      <div className="App">
-        <BrowserRouter>
-          <Routes>
+      <UserProvider>
+        <div className="App">
+          <BrowserRouter>
+            <Routes>
           {/* Public Routes */}
           <Route path="/login" element={
             <PublicRoute>
@@ -128,11 +130,12 @@ function App() {
             </ProtectedRoute>
           } />
 
-          {/* Fallback route */}
-          <Route path="*" element={<Navigate to="/" />} />
-          </Routes>
-        </BrowserRouter>
-      </div>
+            {/* Fallback route */}
+            <Route path="*" element={<Navigate to="/" />} />
+            </Routes>
+          </BrowserRouter>
+        </div>
+      </UserProvider>
     </ThemeProvider>
   );
 }

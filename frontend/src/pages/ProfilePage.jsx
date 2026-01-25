@@ -5,9 +5,9 @@ import { Button } from '../components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Avatar, AvatarFallback, AvatarImage } from '../components/ui/avatar';
 import { Badge } from '../components/ui/badge';
-import { mockPosts } from '../mock/mockData';
-import axios from 'axios';
+import { useUser } from '../context/UserContext';
 import PostCard from '../components/Feed/PostCard';
+import EditProfileModal from '../components/Profile/EditProfileModal';
 import { 
   MapPin, 
   Calendar, 
@@ -25,25 +25,41 @@ import {
 
 const ProfilePage = () => {
   const [activeTab, setActiveTab] = useState('posts');
-  const [me, setMe] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const { user, loading, posts, friends, fetchMyPosts, fetchFriends, likePost, fetchUser } = useUser();
 
   useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const res = await axios.get('/api/users/me');
-        if (mounted) setMe(res.data);
-      } catch (e) {
-        if (mounted) setMe(null);
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    })();
-    return () => { mounted = false; };
-  }, []);
+    fetchMyPosts();
+    fetchFriends();
+  }, [fetchMyPosts, fetchFriends]);
 
-  const userPosts = [];
+  const handleProfileUpdate = async (updatedData) => {
+    // Данные уже обновлены в контексте через updateProfile
+    // Просто закрываем модалку
+  };
+
+  const handleLike = async (postId) => {
+    try {
+      await likePost(postId);
+    } catch (error) {
+      console.error('Error liking post:', error);
+    }
+  };
+
+  if (loading) {
+    return (
+      <MainLayout>
+        <div className="max-w-4xl mx-auto">
+          <Card>
+            <CardContent className="text-center py-12">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto"></div>
+              <p className="mt-4 text-gray-500">Загрузка профиля...</p>
+            </CardContent>
+          </Card>
+        </div>
+      </MainLayout>
+    );
+  }
 
   return (
     <MainLayout>
@@ -53,15 +69,22 @@ const ProfilePage = () => {
           <div className="relative">
             {/* Cover Photo */}
             <div 
-              className="h-64 bg-gradient-to-r from-blue-400 to-purple-500 rounded-t-lg"
-              style={{ backgroundSize: 'cover', backgroundPosition: 'center' }}
+              className="h-64 rounded-t-lg overflow-hidden relative"
+              style={{
+                backgroundImage: user?.cover_photo 
+                  ? `url(${user.cover_photo})` 
+                  : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                backgroundSize: 'cover',
+                backgroundPosition: 'center',
+              }}
             >
-              <div className="absolute inset-0 bg-black/20 rounded-t-lg"></div>
-              {true && (
+              <div className="absolute inset-0 bg-black/20"></div>
+              {user && (
                 <Button 
                   variant="secondary" 
                   size="sm" 
-                  className="absolute top-4 right-4 bg-white/90 hover:bg-white"
+                  className="absolute top-4 right-4 bg-background/95 hover:bg-background text-foreground border-2 border-border shadow-xl backdrop-blur-md font-medium"
+                  onClick={() => setEditModalOpen(true)}
                 >
                   <Camera className="w-4 h-4 mr-2" />
                   Изменить обложку
@@ -72,20 +95,23 @@ const ProfilePage = () => {
             {/* Profile Picture */}
             <div className="absolute -bottom-12 left-6">
               <div className="relative">
-                <Avatar className="w-24 h-24 border-4 border-white">
-                  <AvatarImage src={(me && me.avatar_url) || undefined} alt={me?.username || ''} />
-                  <AvatarFallback className="text-2xl">{(me?.username || 'U')[0]}</AvatarFallback>
+                <Avatar className="w-28 h-28 border-4 border-white shadow-xl">
+                  <AvatarImage src={(user && user.avatar_url) || undefined} alt={user?.username || ''} />
+                  <AvatarFallback className="text-3xl bg-gradient-to-br from-blue-400 to-purple-500 text-white">
+                    {(user?.username || 'U')[0].toUpperCase()}
+                  </AvatarFallback>
                 </Avatar>
-                {true && (
+                {user && (
                   <Button 
                     size="sm" 
-                    className="absolute -bottom-2 -right-2 rounded-full w-8 h-8 p-0 bg-gray-100 hover:bg-gray-200 text-gray-600"
+                    className="absolute -bottom-2 -right-2 rounded-full w-10 h-10 p-0 bg-blue-500 hover:bg-blue-600 text-white shadow-lg"
+                    onClick={() => setEditModalOpen(true)}
                   >
-                    <Camera className="w-4 h-4" />
+                    <Camera className="w-5 h-5" />
                   </Button>
                 )}
-                {true && (
-                  <div className="absolute bottom-1 right-1 w-4 h-4 bg-green-500 rounded-full border-2 border-white"></div>
+                {user && (
+                  <div className="absolute bottom-1 right-1 w-5 h-5 bg-green-500 rounded-full border-3 border-white shadow-md"></div>
                 )}
               </div>
             </div>
@@ -95,51 +121,56 @@ const ProfilePage = () => {
             <div className="flex justify-between items-start">
               <div className="flex-1">
                 <div className="flex items-center space-x-3 mb-2">
-                  <h1 className="text-2xl font-bold">{me?.username || 'Профиль'}</h1>
+                  <h1 className="text-2xl font-bold">{user?.username || 'Профиль'}</h1>
                   <Badge variant="outline" className="text-green-600 border-green-600">
                     В сети
                   </Badge>
                 </div>
-                <p className="text-gray-600 mb-4">{me?.email}</p>
+                <p className="text-gray-600 mb-4">{user?.email}</p>
+                
+                {user?.bio && (
+                  <p className="text-gray-700 dark:text-gray-300 mb-4">{user.bio}</p>
+                )}
                 
                 <div className="flex flex-wrap gap-4 text-sm text-gray-500 mb-4">
-                  <div className="flex items-center">
-                    <MapPin className="w-4 h-4 mr-1" />
-                    Город не указан
-                  </div>
-                  <div className="flex items-center">
-                    <Calendar className="w-4 h-4 mr-1" />
-                    Дата не указана
-                  </div>
+                  {user?.location && (
+                    <div className="flex items-center">
+                      <MapPin className="w-4 h-4 mr-1" />
+                      {user.location}
+                    </div>
+                  )}
+                  {user?.birth_date && (
+                    <div className="flex items-center">
+                      <Calendar className="w-4 h-4 mr-1" />
+                      {user.birth_date}
+                    </div>
+                  )}
                   <div className="flex items-center">
                     <Users className="w-4 h-4 mr-1" />
-                    0 подписчиков
+                    {friends.length} {friends.length === 1 ? 'друг' : friends.length < 5 ? 'друга' : 'друзей'}
                   </div>
                 </div>
 
-                <div className="flex space-x-4 text-sm">
+                <div className="flex space-x-6 text-sm">
                   <div className="text-center">
-                    <div className="font-semibold text-lg">0</div>
+                    <div className="font-semibold text-xl">{posts.length}</div>
                     <div className="text-gray-500">Записи</div>
                   </div>
                   <div className="text-center">
-                    <div className="font-semibold text-lg">0</div>
-                    <div className="text-gray-500">Подписчики</div>
-                  </div>
-                  <div className="text-center">
-                    <div className="font-semibold text-lg">0</div>
-                    <div className="text-gray-500">Подписки</div>
+                    <div className="font-semibold text-xl">{friends.length}</div>
+                    <div className="text-gray-500">Друзья</div>
                   </div>
                 </div>
               </div>
 
               <div className="flex space-x-2">
-                {true ? (
-                  <Button variant="outline">
+                {user && (
+                  <Button variant="outline" onClick={() => setEditModalOpen(true)}>
                     <Edit className="w-4 h-4 mr-2" />
                     Редактировать
                   </Button>
-                ) : (
+                )}
+                {false && (
                   <>
                     <Button>
                       <UserPlus className="w-4 h-4 mr-2" />
@@ -172,14 +203,15 @@ const ProfilePage = () => {
             {/* Main Content */}
             <div className="lg:col-span-2">
               <TabsContent value="posts" className="space-y-4">
-                {userPosts.length > 0 ? (
-                  userPosts.map((post) => (
-                    <PostCard key={post.id} post={post} onLike={() => {}} />
+                {posts.length > 0 ? (
+                  posts.map((post) => (
+                    <PostCard key={post.id} post={post} onLike={() => handleLike(post.id)} />
                   ))
                 ) : (
                   <Card>
                     <CardContent className="text-center py-8">
                       <p className="text-gray-500">Пока нет записей</p>
+                      <p className="text-sm text-gray-400 mt-2">Напишите свой первый пост!</p>
                     </CardContent>
                   </Card>
                 )}
@@ -194,34 +226,39 @@ const ProfilePage = () => {
               </TabsContent>
 
               <TabsContent value="friends">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {mockFriends.map((friend) => (
-                    <Card key={friend.id}>
-                      <CardContent className="p-4">
-                        <div className="flex items-center space-x-3">
-                          <div className="relative">
-                            <Avatar>
-                              <AvatarImage src={friend.avatar} alt={friend.name} />
-                              <AvatarFallback>{friend.name[0]}</AvatarFallback>
-                            </Avatar>
-                            {friend.isOnline && (
-                              <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-green-500 rounded-full border-2 border-white"></div>
-                            )}
+                {friends.length > 0 ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {friends.map((friend) => (
+                      <Card key={friend.id}>
+                        <CardContent className="p-4">
+                          <div className="flex items-center space-x-3">
+                            <div className="relative">
+                              <Avatar>
+                                <AvatarImage src={friend.avatar_url} alt={friend.username} />
+                                <AvatarFallback>{(friend.username || 'U')[0].toUpperCase()}</AvatarFallback>
+                              </Avatar>
+                            </div>
+                            <div className="flex-1">
+                              <p className="font-medium text-sm">{friend.username}</p>
+                              <p className="text-xs text-gray-500">{friend.email}</p>
+                            </div>
                           </div>
-                          <div className="flex-1">
-                            <p className="font-medium text-sm">{friend.name}</p>
-                            <p className="text-xs text-gray-500">
-                              {friend.isOnline ? 'В сети' : friend.lastSeen}
-                            </p>
-                            <p className="text-xs text-gray-400">
-                              {friend.mutualFriends} общих друзей
-                            </p>
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                ) : (
+                  <Card>
+                    <CardContent className="text-center py-8">
+                      <Users className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+                      <p className="text-gray-500">У вас пока нет друзей</p>
+                      <Button variant="outline" className="mt-4" onClick={() => window.location.href = '/find-friends'}>
+                        <UserPlus className="w-4 h-4 mr-2" />
+                        Найти друзей
+                      </Button>
+                    </CardContent>
+                  </Card>
+                )}
               </TabsContent>
 
               <TabsContent value="info">
@@ -232,16 +269,20 @@ const ProfilePage = () => {
                   <CardContent className="space-y-4">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div>
-                        <p className="text-sm font-medium text-gray-500">Дата рождения</p>
-                        <p className="text-sm">{mockUser.birthDate}</p>
+                        <p className="text-sm font-medium text-gray-500">Имя пользователя</p>
+                        <p className="text-sm">{user?.username || 'Не указано'}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-gray-500">Email</p>
+                        <p className="text-sm">{user?.email || 'Не указано'}</p>
                       </div>
                       <div>
                         <p className="text-sm font-medium text-gray-500">Город</p>
-                        <p className="text-sm">{mockUser.location}</p>
+                        <p className="text-sm">{user?.location || 'Не указано'}</p>
                       </div>
                       <div>
-                        <p className="text-sm font-medium text-gray-500">Статус</p>
-                        <p className="text-sm">{mockUser.bio}</p>
+                        <p className="text-sm font-medium text-gray-500">О себе</p>
+                        <p className="text-sm">{user?.bio || 'Не указано'}</p>
                       </div>
                     </div>
                   </CardContent>
@@ -257,16 +298,8 @@ const ProfilePage = () => {
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <div className="flex items-center space-x-3 text-sm">
-                    <Phone className="w-4 h-4 text-gray-400" />
-                    <span>+7 (999) 123-45-67</span>
-                  </div>
-                  <div className="flex items-center space-x-3 text-sm">
                     <Mail className="w-4 h-4 text-gray-400" />
-                    <span>ivan@example.com</span>
-                  </div>
-                  <div className="flex items-center space-x-3 text-sm">
-                    <Globe className="w-4 h-4 text-gray-400" />
-                    <span>ivan-dev.ru</span>
+                    <span>{user?.email || 'Не указано'}</span>
                   </div>
                 </CardContent>
               </Card>
@@ -277,16 +310,12 @@ const ProfilePage = () => {
                 </CardHeader>
                 <CardContent className="space-y-2">
                   <div className="flex justify-between text-sm">
-                    <span>Просмотры профиля</span>
-                    <span className="font-medium">1,234</span>
+                    <span>Постов</span>
+                    <span className="font-medium">{posts.length}</span>
                   </div>
                   <div className="flex justify-between text-sm">
-                    <span>Лайки за месяц</span>
-                    <span className="font-medium">567</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span>Комментарии</span>
-                    <span className="font-medium">890</span>
+                    <span>Друзей</span>
+                    <span className="font-medium">{friends.length}</span>
                   </div>
                 </CardContent>
               </Card>
@@ -294,6 +323,16 @@ const ProfilePage = () => {
           </div>
         </Tabs>
       </div>
+
+      {/* Edit Profile Modal */}
+      {user && (
+        <EditProfileModal
+          open={editModalOpen}
+          onClose={() => setEditModalOpen(false)}
+          user={user}
+          onUpdate={handleProfileUpdate}
+        />
+      )}
     </MainLayout>
   );
 };

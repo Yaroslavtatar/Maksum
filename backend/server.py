@@ -1,4 +1,5 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Response
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Response, UploadFile, File
+from fastapi.responses import FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -72,6 +73,10 @@ class UserUpdate(BaseModel):
     username: Optional[str] = None
     email: Optional[str] = None
     avatar_url: Optional[str] = None
+    cover_photo: Optional[str] = None
+    bio: Optional[str] = None
+    location: Optional[str] = None
+    birth_date: Optional[str] = None
 
 class UserSearchResponse(BaseModel):
     id: int
@@ -86,6 +91,48 @@ class MessageSend(BaseModel):
     conversation_id: Optional[int] = None
     to_user_id: Optional[int] = None
     content: str
+
+# Post Models
+class PostCreate(BaseModel):
+    content: str
+    images: List[str] = []
+
+class PostResponse(BaseModel):
+    id: int
+    author_id: int
+    author_username: str
+    author_avatar: Optional[str] = None
+    content: str
+    images: List[str] = []
+    likes: int = 0
+    comments: int = 0
+    liked: bool = False
+    created_at: datetime
+
+class UserProfileUpdate(BaseModel):
+    username: Optional[str] = None
+    email: Optional[str] = None
+    avatar_url: Optional[str] = None
+    cover_photo: Optional[str] = None
+    bio: Optional[str] = None
+    location: Optional[str] = None
+    birth_date: Optional[str] = None
+
+class ImageUpload(BaseModel):
+    image_url: str  # URL или base64 data URL
+
+class UserFullProfile(BaseModel):
+    id: int
+    username: str
+    email: str
+    avatar_url: Optional[str] = None
+    bio: Optional[str] = None
+    location: Optional[str] = None
+    birth_date: Optional[str] = None
+    followers_count: int = 0
+    following_count: int = 0
+    posts_count: int = 0
+    is_online: bool = True
 
 # Startup event
 @app.on_event("startup")
@@ -142,9 +189,9 @@ async def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depend
             row = await conn.fetchrow("SELECT id FROM users WHERE id = $1", user_id)
         else:  # sqlite
             async with conn.execute("SELECT id FROM users WHERE id = ?", (user_id,)) as cursor:
-                row = await cursor.fetchone()
-        if not row:
-            raise HTTPException(status_code=401, detail="User not found")
+            row = await cursor.fetchone()
+            if not row:
+                raise HTTPException(status_code=401, detail="User not found")
     return user_id
 
 # API Routes
@@ -157,7 +204,7 @@ async def root():
 async def register_user(data: RegisterInput):
     db_type = get_db_type()
     async with get_db() as conn:
-        # Проверяем уникальность
+            # Проверяем уникальность
         if db_type == 'postgresql':
             exists = await conn.fetchrow(
                 "SELECT id FROM users WHERE username = $1 OR email = $2",
@@ -168,12 +215,12 @@ async def register_user(data: RegisterInput):
                 "SELECT id FROM users WHERE username = ? OR email = ?",
                 (data.username, data.email)
             ) as cursor:
-                exists = await cursor.fetchone()
+            exists = await cursor.fetchone()
         
-        if exists:
-            raise HTTPException(status_code=400, detail="Username or email already in use")
+            if exists:
+                raise HTTPException(status_code=400, detail="Username or email already in use")
         
-        pw_hash = hash_password(data.password)
+            pw_hash = hash_password(data.password)
         
         if db_type == 'postgresql':
             user_id = await conn.fetchval(
@@ -188,13 +235,13 @@ async def register_user(data: RegisterInput):
             await conn.commit()
             user_id = cursor.lastrowid
         
-        return UserPublic(id=user_id, username=data.username, email=data.email, avatar_url=None)
+            return UserPublic(id=user_id, username=data.username, email=data.email, avatar_url=None)
 
 @api_router.post("/auth/login", response_model=TokenResponse)
 async def login_user(data: LoginInput):
     db_type = get_db_type()
     async with get_db() as conn:
-        # Находим по username или email
+            # Находим по username или email
         if db_type == 'postgresql':
             user = await conn.fetchrow(
                 "SELECT id, password_hash FROM users WHERE username = $1 OR email = $1",
@@ -213,26 +260,27 @@ async def login_user(data: LoginInput):
                 else:
                     user = None
         
-        if not user or not verify_password(data.password, user["password_hash"]):
-            raise HTTPException(status_code=401, detail="Invalid credentials")
-        token = create_access_token({"sub": str(user["id"])})
-        return TokenResponse(access_token=token)
+            if not user or not verify_password(data.password, user["password_hash"]):
+                raise HTTPException(status_code=401, detail="Invalid credentials")
+            token = create_access_token({"sub": str(user["id"])})
+            return TokenResponse(access_token=token)
 
 # ===================== Users API =====================
-@api_router.get("/users/me", response_model=UserPublic)
+@api_router.get("/users/me")
 async def get_me(user_id: int = Depends(get_current_user_id)):
+    """Получить полные данные текущего пользователя"""
     db_type = get_db_type()
     async with get_db() as conn:
         if db_type == 'postgresql':
             row = await conn.fetchrow(
-                "SELECT id, username, email, avatar_url FROM users WHERE id = $1",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date FROM users WHERE id = $1",
                 user_id
             )
             if row:
                 row = dict(row)
         else:  # sqlite
             async with conn.execute(
-                "SELECT id, username, email, avatar_url FROM users WHERE id = ?",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date FROM users WHERE id = ?",
                 (user_id,)
             ) as cursor:
                 row_data = await cursor.fetchone()
@@ -241,29 +289,34 @@ async def get_me(user_id: int = Depends(get_current_user_id)):
                         "id": row_data[0],
                         "username": row_data[1],
                         "email": row_data[2],
-                        "avatar_url": row_data[3]
+                        "avatar_url": row_data[3],
+                        "cover_photo": row_data[4] if len(row_data) > 4 else None,
+                        "bio": row_data[5] if len(row_data) > 5 else None,
+                        "location": row_data[6] if len(row_data) > 6 else None,
+                        "birth_date": row_data[7] if len(row_data) > 7 else None,
                     }
                 else:
                     row = None
         
-        if not row:
-            raise HTTPException(status_code=404, detail="User not found")
-        return UserPublic(**row)
+            if not row:
+                raise HTTPException(status_code=404, detail="User not found")
+        return row
 
-@api_router.get("/users/{id}", response_model=UserPublic)
+@api_router.get("/users/{id}")
 async def get_user_by_id(id: int, _uid: int = Depends(get_current_user_id)):
+    """Получить данные пользователя по ID"""
     db_type = get_db_type()
     async with get_db() as conn:
         if db_type == 'postgresql':
             row = await conn.fetchrow(
-                "SELECT id, username, email, avatar_url FROM users WHERE id = $1",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date FROM users WHERE id = $1",
                 id
             )
             if row:
                 row = dict(row)
         else:  # sqlite
             async with conn.execute(
-                "SELECT id, username, email, avatar_url FROM users WHERE id = ?",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date FROM users WHERE id = ?",
                 (id,)
             ) as cursor:
                 row_data = await cursor.fetchone()
@@ -272,14 +325,18 @@ async def get_user_by_id(id: int, _uid: int = Depends(get_current_user_id)):
                         "id": row_data[0],
                         "username": row_data[1],
                         "email": row_data[2],
-                        "avatar_url": row_data[3]
+                        "avatar_url": row_data[3],
+                        "cover_photo": row_data[4] if len(row_data) > 4 else None,
+                        "bio": row_data[5] if len(row_data) > 5 else None,
+                        "location": row_data[6] if len(row_data) > 6 else None,
+                        "birth_date": row_data[7] if len(row_data) > 7 else None,
                     }
                 else:
                     row = None
         
-        if not row:
-            raise HTTPException(status_code=404, detail="User not found")
-        return UserPublic(**row)
+            if not row:
+                raise HTTPException(status_code=404, detail="User not found")
+        return row
 
 @api_router.put("/users/me", response_model=UserPublic)
 async def update_me(data: UserUpdate, user_id: int = Depends(get_current_user_id)):
@@ -309,19 +366,47 @@ async def update_me(data: UserUpdate, user_id: int = Depends(get_current_user_id
         else:
             updates.append("avatar_url = ?")
         values.append(data.avatar_url)
+    if data.cover_photo is not None:
+        if db_type == 'postgresql':
+            updates.append(f"cover_photo = ${param_num}")
+            param_num += 1
+        else:
+            updates.append("cover_photo = ?")
+        values.append(data.cover_photo)
+    if data.bio is not None:
+        if db_type == 'postgresql':
+            updates.append(f"bio = ${param_num}")
+            param_num += 1
+        else:
+            updates.append("bio = ?")
+        values.append(data.bio)
+    if data.location is not None:
+        if db_type == 'postgresql':
+            updates.append(f"location = ${param_num}")
+            param_num += 1
+        else:
+            updates.append("location = ?")
+        values.append(data.location)
+    if data.birth_date is not None:
+        if db_type == 'postgresql':
+            updates.append(f"birth_date = ${param_num}")
+            param_num += 1
+        else:
+            updates.append("birth_date = ?")
+        values.append(data.birth_date)
     
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
     
     async with get_db() as conn:
         if db_type == 'postgresql':
-            values.append(user_id)
+    values.append(user_id)
             await conn.execute(
                 f"UPDATE users SET {', '.join(updates)} WHERE id = ${param_num}",
                 *values
             )
             row = await conn.fetchrow(
-                "SELECT id, username, email, avatar_url FROM users WHERE id = $1",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date FROM users WHERE id = $1",
                 user_id
             )
             if row:
@@ -336,7 +421,7 @@ async def update_me(data: UserUpdate, user_id: int = Depends(get_current_user_id
             )
             await conn.commit()
             async with conn.execute(
-                "SELECT id, username, email, avatar_url FROM users WHERE id = ?",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date FROM users WHERE id = ?",
                 (user_id,)
             ) as cursor:
                 row_data = await cursor.fetchone()
@@ -345,14 +430,18 @@ async def update_me(data: UserUpdate, user_id: int = Depends(get_current_user_id
                         "id": row_data[0],
                         "username": row_data[1],
                         "email": row_data[2],
-                        "avatar_url": row_data[3]
+                        "avatar_url": row_data[3],
+                        "cover_photo": row_data[4] if len(row_data) > 4 else None,
+                        "bio": row_data[5] if len(row_data) > 5 else None,
+                        "location": row_data[6] if len(row_data) > 6 else None,
+                        "birth_date": row_data[7] if len(row_data) > 7 else None,
                     }
                 else:
                     row = None
         
         if not row:
             raise HTTPException(status_code=404, detail="User not found")
-        return UserPublic(**row)
+        return row
 
 @api_router.get("/users/search", response_model=List[UserSearchResponse])
 async def search_users(q: str, _uid: int = Depends(get_current_user_id)):
@@ -380,7 +469,7 @@ async def search_users(q: str, _uid: int = Depends(get_current_user_id)):
                     }
                     for r in rows_data
                 ]
-        return [UserSearchResponse(**r) for r in rows]
+            return [UserSearchResponse(**r) for r in rows]
 
 @api_router.post("/status", response_model=StatusCheck)
 async def create_status_check(input: StatusCheckCreate):
@@ -412,7 +501,7 @@ async def get_status_checks():
                 rows_data = await cursor.fetchall()
                 columns = [desc[0] for desc in cursor.description]
                 rows = [dict(zip(columns, r)) for r in rows_data]
-        return [StatusCheck(**row) for row in rows]
+            return [StatusCheck(**row) for row in rows]
 
 # Theme API endpoints
 @api_router.get("/user/theme", response_model=UserThemeResponse)
@@ -437,15 +526,15 @@ async def get_user_theme(user_id: int = Depends(get_current_user_id)):
                     result = {'theme_mode': row[0], 'theme_palette': row[1]}
                 else:
                     result = None
-        
-        if result:
-            return UserThemeResponse(
-                mode=result['theme_mode'],
-                palette=result['theme_palette']
-            )
-        else:
-            # Возвращаем дефолтную тему
-            return UserThemeResponse(mode='light', palette='blue')
+            
+            if result:
+                return UserThemeResponse(
+                    mode=result['theme_mode'],
+                    palette=result['theme_palette']
+                )
+            else:
+                # Возвращаем дефолтную тему
+                return UserThemeResponse(mode='light', palette='blue')
 
 @api_router.put("/user/theme", response_model=UserThemeResponse)
 async def update_user_theme(
@@ -494,7 +583,7 @@ async def update_user_theme(
                 )
         else:  # sqlite
             async with conn.execute("SELECT id FROM users WHERE id = ?", (user_id,)) as cursor:
-                user_exists = await cursor.fetchone()
+            user_exists = await cursor.fetchone()
             
             if not user_exists:
                 await conn.execute(
@@ -521,11 +610,11 @@ async def get_my_avatar(user_id: int = Depends(get_current_user_id)):
             avatar_url = await conn.fetchval("SELECT avatar_url FROM users WHERE id = $1", user_id)
         else:  # sqlite
             async with conn.execute("SELECT avatar_url FROM users WHERE id = ?", (user_id,)) as cursor:
-                row = await cursor.fetchone()
+            row = await cursor.fetchone()
                 avatar_url = row[0] if row else None
         
-        if avatar_url:
-            return RedirectResponse(url=avatar_url)
+            if avatar_url:
+                return RedirectResponse(url=avatar_url)
 
     # SVG силуэт человека на сером фоне 128x128
     svg = (
@@ -539,14 +628,68 @@ async def get_my_avatar(user_id: int = Depends(get_current_user_id)):
     ).strip()
     return Response(content=svg, media_type="image/svg+xml")
 
+@api_router.post("/users/me/avatar")
+async def upload_avatar(data: ImageUpload, user_id: int = Depends(get_current_user_id)):
+    """Загрузить аватар пользователя (URL или base64)"""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            await conn.execute(
+                "UPDATE users SET avatar_url = $1 WHERE id = $2",
+                data.image_url, user_id
+            )
+        else:  # sqlite
+            await conn.execute(
+                "UPDATE users SET avatar_url = ? WHERE id = ?",
+                (data.image_url, user_id)
+            )
+            await conn.commit()
+    
+    return {"status": "success", "avatar_url": data.image_url}
+
+@api_router.post("/users/me/cover")
+async def upload_cover(data: ImageUpload, user_id: int = Depends(get_current_user_id)):
+    """Загрузить баннер профиля (URL или base64)"""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            await conn.execute(
+                "UPDATE users SET cover_photo = $1 WHERE id = $2",
+                data.image_url, user_id
+            )
+        else:  # sqlite
+            await conn.execute(
+                "UPDATE users SET cover_photo = ? WHERE id = ?",
+                (data.image_url, user_id)
+            )
+            await conn.commit()
+    
+    return {"status": "success", "cover_photo": data.image_url}
+
 # ===================== Friends API =====================
+async def create_notification(user_id: int, notif_type: str, actor_id: int, target_id: int = None, target_type: str = None, content: str = None):
+    """Создать уведомление"""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            await conn.execute(
+                "INSERT INTO notifications (user_id, type, actor_id, target_id, target_type, content) VALUES ($1, $2, $3, $4, $5, $6)",
+                user_id, notif_type, actor_id, target_id, target_type, content
+            )
+        else:  # sqlite
+            await conn.execute(
+                "INSERT INTO notifications (user_id, type, actor_id, target_id, target_type, content) VALUES (?, ?, ?, ?, ?, ?)",
+                (user_id, notif_type, actor_id, target_id, target_type, content)
+            )
+            await conn.commit()
+
 @api_router.post("/friends/request")
 async def send_friend_request(data: FriendAction, user_id: int = Depends(get_current_user_id)):
     if data.user_id == user_id:
         raise HTTPException(status_code=400, detail="Cannot friend yourself")
     db_type = get_db_type()
     async with get_db() as conn:
-        # Avoid duplicates and normalize requester/addressee pair
+            # Avoid duplicates and normalize requester/addressee pair
         if db_type == 'postgresql':
             row = await conn.fetchrow(
                 """
@@ -576,21 +719,21 @@ async def send_friend_request(data: FriendAction, user_id: int = Depends(get_cur
                 else:
                     row = None
         
-        if row:
-            if row["status"] == 'accepted':
-                raise HTTPException(status_code=400, detail="Already friends")
-            if row["requester_id"] == user_id and row["status"] == 'pending':
-                raise HTTPException(status_code=400, detail="Request already sent")
-            # If inverse pending exists, accept it
-            if row["addressee_id"] == user_id and row["status"] == 'pending':
+            if row:
+                if row["status"] == 'accepted':
+                    raise HTTPException(status_code=400, detail="Already friends")
+                if row["requester_id"] == user_id and row["status"] == 'pending':
+                    raise HTTPException(status_code=400, detail="Request already sent")
+                # If inverse pending exists, accept it
+                if row["addressee_id"] == user_id and row["status"] == 'pending':
                 if db_type == 'postgresql':
                     await conn.execute("UPDATE friendships SET status='accepted' WHERE id=$1", row["id"])
                 else:
                     await conn.execute("UPDATE friendships SET status='accepted' WHERE id=?", (row["id"],))
                     await conn.commit()
-                return {"status": "accepted"}
+                    return {"status": "accepted"}
         
-        # create new pending
+            # create new pending
         if db_type == 'postgresql':
             await conn.execute(
                 "INSERT INTO friendships (requester_id, addressee_id, status) VALUES ($1, $2, 'pending')",
@@ -602,7 +745,16 @@ async def send_friend_request(data: FriendAction, user_id: int = Depends(get_cur
                 (user_id, data.user_id,)
             )
             await conn.commit()
-        return {"status": "pending"}
+        
+        # Создаём уведомление для получателя заявки
+        await create_notification(
+            user_id=data.user_id,
+            notif_type="friend_request",
+            actor_id=user_id,
+            content="отправил(а) вам заявку в друзья"
+        )
+        
+            return {"status": "pending"}
 
 @api_router.post("/friends/accept")
 async def accept_friend_request(data: FriendAction, user_id: int = Depends(get_current_user_id)):
@@ -623,7 +775,16 @@ async def accept_friend_request(data: FriendAction, user_id: int = Depends(get_c
             await conn.commit()
             if conn.total_changes == 0:
                 raise HTTPException(status_code=404, detail="Request not found")
-        return {"status": "accepted"}
+        
+        # Создаём уведомление для отправителя заявки
+        await create_notification(
+            user_id=data.user_id,
+            notif_type="friend_accepted",
+            actor_id=user_id,
+            content="принял(а) вашу заявку в друзья"
+        )
+        
+            return {"status": "accepted"}
 
 @api_router.post("/friends/remove")
 async def remove_friend(data: FriendAction, user_id: int = Depends(get_current_user_id)):
@@ -640,7 +801,7 @@ async def remove_friend(data: FriendAction, user_id: int = Depends(get_current_u
                 (user_id, data.user_id, data.user_id, user_id)
             )
             await conn.commit()
-        return {"status": "removed"}
+            return {"status": "removed"}
 
 @api_router.get("/friends")
 async def list_friends(user_id: int = Depends(get_current_user_id)):
@@ -681,19 +842,85 @@ async def list_friends(user_id: int = Depends(get_current_user_id)):
                 ]
         return rows
 
-# ===================== Messaging API =====================
-@api_router.get("/conversations")
-async def list_conversations(user_id: int = Depends(get_current_user_id)):
+# ===================== Posts API =====================
+@api_router.post("/posts")
+async def create_post(data: PostCreate, user_id: int = Depends(get_current_user_id)):
+    """Создать новый пост"""
     db_type = get_db_type()
+    images_json = json.dumps(data.images)
+    
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            post_id = await conn.fetchval(
+                "INSERT INTO posts (author_id, content, images) VALUES ($1, $2, $3) RETURNING id",
+                user_id, data.content, images_json
+            )
+            # Получаем созданный пост с данными автора
+            row = await conn.fetchrow(
+                """
+                SELECT p.id, p.author_id, p.content, p.images, p.likes_count, p.comments_count, p.created_at,
+                       u.username, u.avatar_url
+                FROM posts p
+                JOIN users u ON u.id = p.author_id
+                WHERE p.id = $1
+                """,
+                post_id
+            )
+            row = dict(row)
+        else:  # sqlite
+            cursor = await conn.execute(
+                "INSERT INTO posts (author_id, content, images) VALUES (?, ?, ?)",
+                (user_id, data.content, images_json)
+            )
+            await conn.commit()
+            post_id = cursor.lastrowid
+            async with conn.execute(
+                """
+                SELECT p.id, p.author_id, p.content, p.images, p.likes_count, p.comments_count, p.created_at,
+                       u.username, u.avatar_url
+                FROM posts p
+                JOIN users u ON u.id = p.author_id
+                WHERE p.id = ?
+                """,
+                (post_id,)
+            ) as cursor:
+                r = await cursor.fetchone()
+                row = {
+                    "id": r[0], "author_id": r[1], "content": r[2], "images": r[3],
+                    "likes_count": r[4], "comments_count": r[5], "created_at": r[6],
+                    "username": r[7], "avatar_url": r[8]
+                }
+    
+    return {
+        "id": row["id"],
+        "author_id": row["author_id"],
+        "author_username": row["username"],
+        "author_avatar": row["avatar_url"],
+        "content": row["content"],
+        "images": json.loads(row["images"]) if row["images"] else [],
+        "likes": row["likes_count"],
+        "comments": row["comments_count"],
+        "liked": False,
+        "created_at": row["created_at"]
+    }
+
+@api_router.get("/posts/my")
+async def get_my_posts(user_id: int = Depends(get_current_user_id)):
+    """Получить посты текущего пользователя"""
+    db_type = get_db_type()
+    
     async with get_db() as conn:
         if db_type == 'postgresql':
             rows = await conn.fetch(
                 """
-                SELECT c.id, c.is_group, c.created_at
-                FROM conversation_participants p
-                JOIN conversations c ON c.id = p.conversation_id
-                WHERE p.user_id = $1
-                ORDER BY c.id DESC
+                SELECT p.id, p.author_id, p.content, p.images, p.likes_count, p.comments_count, p.created_at,
+                       u.username, u.avatar_url,
+                       EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = $1) as liked
+                FROM posts p
+                JOIN users u ON u.id = p.author_id
+                WHERE p.author_id = $1
+                ORDER BY p.created_at DESC
+                LIMIT 100
                 """,
                 user_id
             )
@@ -701,20 +928,324 @@ async def list_conversations(user_id: int = Depends(get_current_user_id)):
         else:  # sqlite
             async with conn.execute(
                 """
-                SELECT c.id, c.is_group, c.created_at
+                SELECT p.id, p.author_id, p.content, p.images, p.likes_count, p.comments_count, p.created_at,
+                       u.username, u.avatar_url,
+                       EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = ?) as liked
+                FROM posts p
+                JOIN users u ON u.id = p.author_id
+                WHERE p.author_id = ?
+                ORDER BY p.created_at DESC
+                LIMIT 100
+                """,
+                (user_id, user_id)
+            ) as cursor:
+                rows_data = await cursor.fetchall()
+                rows = [
+                    {
+                        "id": r[0], "author_id": r[1], "content": r[2], "images": r[3],
+                        "likes_count": r[4], "comments_count": r[5], "created_at": r[6],
+                        "username": r[7], "avatar_url": r[8], "liked": bool(r[9])
+                    }
+                    for r in rows_data
+                ]
+    
+    return [
+        {
+            "id": r["id"],
+            "author_id": r["author_id"],
+            "author_username": r["username"],
+            "author_avatar": r["avatar_url"],
+            "content": r["content"],
+            "images": json.loads(r["images"]) if r["images"] else [],
+            "likes": r["likes_count"],
+            "comments": r["comments_count"],
+            "liked": r["liked"],
+            "created_at": r["created_at"]
+        }
+        for r in rows
+    ]
+
+@api_router.get("/feed")
+async def get_feed(user_id: int = Depends(get_current_user_id)):
+    """Получить ленту новостей (посты друзей и свои)"""
+    db_type = get_db_type()
+    
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            rows = await conn.fetch(
+                """
+                SELECT p.id, p.author_id, p.content, p.images, p.likes_count, p.comments_count, p.created_at,
+                       u.username, u.avatar_url,
+                       EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = $1) as liked
+                FROM posts p
+                JOIN users u ON u.id = p.author_id
+                WHERE p.author_id = $1
+                   OR p.author_id IN (
+                       SELECT CASE WHEN f.requester_id = $1 THEN f.addressee_id ELSE f.requester_id END
+                       FROM friendships f
+                       WHERE (f.requester_id = $1 OR f.addressee_id = $1) AND f.status = 'accepted'
+                   )
+                ORDER BY p.created_at DESC
+                LIMIT 50
+                """,
+                user_id
+            )
+            rows = [dict(r) for r in rows]
+        else:  # sqlite
+            async with conn.execute(
+                """
+                SELECT p.id, p.author_id, p.content, p.images, p.likes_count, p.comments_count, p.created_at,
+                       u.username, u.avatar_url,
+                       EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = ?) as liked
+                FROM posts p
+                JOIN users u ON u.id = p.author_id
+                WHERE p.author_id = ?
+                   OR p.author_id IN (
+                       SELECT CASE WHEN f.requester_id = ? THEN f.addressee_id ELSE f.requester_id END
+                       FROM friendships f
+                       WHERE (f.requester_id = ? OR f.addressee_id = ?) AND f.status = 'accepted'
+                   )
+                ORDER BY p.created_at DESC
+                LIMIT 50
+                """,
+                (user_id, user_id, user_id, user_id, user_id)
+            ) as cursor:
+                rows_data = await cursor.fetchall()
+                rows = [
+                    {
+                        "id": r[0], "author_id": r[1], "content": r[2], "images": r[3],
+                        "likes_count": r[4], "comments_count": r[5], "created_at": r[6],
+                        "username": r[7], "avatar_url": r[8], "liked": bool(r[9])
+                    }
+                    for r in rows_data
+                ]
+    
+    return [
+        {
+            "id": r["id"],
+            "author_id": r["author_id"],
+            "author_username": r["username"],
+            "author_avatar": r["avatar_url"],
+            "content": r["content"],
+            "images": json.loads(r["images"]) if r["images"] else [],
+            "likes": r["likes_count"],
+            "comments": r["comments_count"],
+            "liked": r["liked"],
+            "created_at": r["created_at"]
+        }
+        for r in rows
+    ]
+
+@api_router.post("/posts/{post_id}/like")
+async def like_post(post_id: int, user_id: int = Depends(get_current_user_id)):
+    """Поставить/убрать лайк посту"""
+    db_type = get_db_type()
+    
+    async with get_db() as conn:
+        # Проверяем, есть ли уже лайк
+        if db_type == 'postgresql':
+            existing = await conn.fetchval(
+                "SELECT id FROM post_likes WHERE post_id = $1 AND user_id = $2",
+                post_id, user_id
+            )
+            if existing:
+                # Убираем лайк
+                await conn.execute("DELETE FROM post_likes WHERE post_id = $1 AND user_id = $2", post_id, user_id)
+                await conn.execute("UPDATE posts SET likes_count = likes_count - 1 WHERE id = $1", post_id)
+                liked = False
+            else:
+                # Добавляем лайк
+                await conn.execute(
+                    "INSERT INTO post_likes (post_id, user_id) VALUES ($1, $2)",
+                    post_id, user_id
+                )
+                await conn.execute("UPDATE posts SET likes_count = likes_count + 1 WHERE id = $1", post_id)
+                liked = True
+                # Создаём уведомление для автора поста
+                post_author = await conn.fetchval("SELECT author_id FROM posts WHERE id = $1", post_id)
+                if post_author and post_author != user_id:
+                    await create_notification(
+                        user_id=post_author,
+                        notif_type="post_like",
+                        actor_id=user_id,
+                        target_id=post_id,
+                        target_type="post",
+                        content="поставил(а) лайк вашему посту"
+                    )
+            
+            likes = await conn.fetchval("SELECT likes_count FROM posts WHERE id = $1", post_id)
+        else:  # sqlite
+            async with conn.execute(
+                "SELECT id FROM post_likes WHERE post_id = ? AND user_id = ?",
+                (post_id, user_id)
+            ) as cursor:
+                existing = await cursor.fetchone()
+            
+            if existing:
+                await conn.execute("DELETE FROM post_likes WHERE post_id = ? AND user_id = ?", (post_id, user_id))
+                await conn.execute("UPDATE posts SET likes_count = likes_count - 1 WHERE id = ?", (post_id,))
+                liked = False
+            else:
+                await conn.execute(
+                    "INSERT INTO post_likes (post_id, user_id) VALUES (?, ?)",
+                    (post_id, user_id)
+                )
+                await conn.execute("UPDATE posts SET likes_count = likes_count + 1 WHERE id = ?", (post_id,))
+                liked = True
+                # Создаём уведомление для автора поста
+                async with conn.execute("SELECT author_id FROM posts WHERE id = ?", (post_id,)) as cursor:
+                    author_row = await cursor.fetchone()
+                    post_author = author_row[0] if author_row else None
+                if post_author and post_author != user_id:
+                    await create_notification(
+                        user_id=post_author,
+                        notif_type="post_like",
+                        actor_id=user_id,
+                        target_id=post_id,
+                        target_type="post",
+                        content="поставил(а) лайк вашему посту"
+                    )
+            
+            await conn.commit()
+            async with conn.execute("SELECT likes_count FROM posts WHERE id = ?", (post_id,)) as cursor:
+                row = await cursor.fetchone()
+                likes = row[0] if row else 0
+    
+    return {"liked": liked, "likes": likes}
+
+@api_router.get("/posts/{post_id}")
+async def get_post(post_id: int, user_id: int = Depends(get_current_user_id)):
+    """Получить пост по ID"""
+    db_type = get_db_type()
+    
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            row = await conn.fetchrow(
+                """
+                SELECT p.id, p.author_id, p.content, p.images, p.likes_count, p.comments_count, p.created_at,
+                       u.username, u.avatar_url,
+                       EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = $2) as liked
+                FROM posts p
+                JOIN users u ON u.id = p.author_id
+                WHERE p.id = $1
+                """,
+                post_id, user_id
+            )
+            if not row:
+                raise HTTPException(status_code=404, detail="Post not found")
+            row = dict(row)
+        else:  # sqlite
+            async with conn.execute(
+                """
+                SELECT p.id, p.author_id, p.content, p.images, p.likes_count, p.comments_count, p.created_at,
+                       u.username, u.avatar_url,
+                       EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = ?) as liked
+                FROM posts p
+                JOIN users u ON u.id = p.author_id
+                WHERE p.id = ?
+                """,
+                (user_id, post_id)
+            ) as cursor:
+                r = await cursor.fetchone()
+                if not r:
+                    raise HTTPException(status_code=404, detail="Post not found")
+                row = {
+                    "id": r[0], "author_id": r[1], "content": r[2], "images": r[3],
+                    "likes_count": r[4], "comments_count": r[5], "created_at": r[6],
+                    "username": r[7], "avatar_url": r[8], "liked": bool(r[9])
+                }
+    
+    return {
+        "id": row["id"],
+        "author_id": row["author_id"],
+        "author_username": row["username"],
+        "author_avatar": row["avatar_url"],
+        "content": row["content"],
+        "images": json.loads(row["images"]) if row["images"] else [],
+        "likes": row["likes_count"],
+        "comments": row["comments_count"],
+        "liked": row["liked"],
+        "created_at": row["created_at"]
+    }
+
+# ===================== Messaging API =====================
+@api_router.get("/conversations")
+async def list_conversations(user_id: int = Depends(get_current_user_id)):
+    """Получить список диалогов с информацией о собеседниках и последнем сообщении"""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (c.id)
+                    c.id,
+                    c.is_group,
+                    c.created_at,
+                    u.id as other_user_id,
+                    u.username as other_username,
+                    u.avatar_url as other_avatar,
+                    m.content as last_message,
+                    m.created_at as last_message_at,
+                    m.sender_id as last_message_sender_id
                 FROM conversation_participants p
                 JOIN conversations c ON c.id = p.conversation_id
+                LEFT JOIN conversation_participants p2 ON p2.conversation_id = c.id AND p2.user_id != $1
+                LEFT JOIN users u ON u.id = p2.user_id AND c.is_group = FALSE
+                LEFT JOIN LATERAL (
+                    SELECT content, created_at, sender_id
+                    FROM messages
+                    WHERE conversation_id = c.id
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                ) m ON TRUE
+                WHERE p.user_id = $1
+                ORDER BY c.id DESC, m.created_at DESC NULLS LAST
+                """,
+                user_id
+            )
+            rows = [dict(r) for r in rows]
+        else:  # sqlite
+            async with conn.execute(
+                """
+                SELECT 
+                    c.id,
+                    c.is_group,
+                    c.created_at,
+                    u.id as other_user_id,
+                    u.username as other_username,
+                    u.avatar_url as other_avatar,
+                    m.content as last_message,
+                    m.created_at as last_message_at,
+                    m.sender_id as last_message_sender_id
+                FROM conversation_participants p
+                JOIN conversations c ON c.id = p.conversation_id
+                LEFT JOIN conversation_participants p2 ON p2.conversation_id = c.id AND p2.user_id != ?
+                LEFT JOIN users u ON u.id = p2.user_id AND c.is_group = 0
+                LEFT JOIN (
+                    SELECT conversation_id, content, created_at, sender_id
+                    FROM messages m1
+                    WHERE m1.created_at = (
+                        SELECT MAX(created_at) FROM messages m2 WHERE m2.conversation_id = m1.conversation_id
+                    )
+                ) m ON m.conversation_id = c.id
                 WHERE p.user_id = ?
+                GROUP BY c.id
                 ORDER BY c.id DESC
                 """,
-                (user_id,)
+                (user_id, user_id)
             ) as cursor:
                 rows_data = await cursor.fetchall()
                 rows = [
                     {
                         "id": r[0],
                         "is_group": bool(r[1]),
-                        "created_at": r[2]
+                        "created_at": r[2],
+                        "other_user_id": r[3],
+                        "other_username": r[4],
+                        "other_avatar": r[5],
+                        "last_message": r[6],
+                        "last_message_at": r[7],
+                        "last_message_sender_id": r[8]
                     }
                     for r in rows_data
                 ]
@@ -724,7 +1255,7 @@ async def list_conversations(user_id: int = Depends(get_current_user_id)):
 async def get_messages(conversation_id: int, user_id: int = Depends(get_current_user_id)):
     db_type = get_db_type()
     async with get_db() as conn:
-        # Ensure membership
+            # Ensure membership
         if db_type == 'postgresql':
             member = await conn.fetchval(
                 "SELECT 1 FROM conversation_participants WHERE conversation_id=$1 AND user_id=$2",
@@ -738,7 +1269,7 @@ async def get_messages(conversation_id: int, user_id: int = Depends(get_current_
                 member = await cursor.fetchone()
         
         if not member:
-            raise HTTPException(status_code=403, detail="Not a participant")
+                raise HTTPException(status_code=403, detail="Not a participant")
         
         if db_type == 'postgresql':
             rows = await conn.fetch(
@@ -769,13 +1300,13 @@ async def send_message(data: MessageSend, user_id: int = Depends(get_current_use
         raise HTTPException(status_code=400, detail="Invalid payload")
     db_type = get_db_type()
     async with get_db() as conn:
-        conversation_id = data.conversation_id
-        # Create conversation with direct user if needed
-        if conversation_id is None:
-            to_user = data.to_user_id
-            if to_user == user_id:
-                raise HTTPException(status_code=400, detail="Cannot message yourself")
-            # Try find existing two-user conversation
+            conversation_id = data.conversation_id
+            # Create conversation with direct user if needed
+            if conversation_id is None:
+                to_user = data.to_user_id
+                if to_user == user_id:
+                    raise HTTPException(status_code=400, detail="Cannot message yourself")
+                # Try find existing two-user conversation
             if db_type == 'postgresql':
                 row = await conn.fetchrow(
                     """
@@ -805,19 +1336,19 @@ async def send_message(data: MessageSend, user_id: int = Depends(get_current_use
                     """,
                     (user_id, to_user)
                 ) as cursor:
-                    row = await cursor.fetchone()
-                    if row:
+                row = await cursor.fetchone()
+                if row:
                         conversation_id = row[0]
-                    else:
-                        # create new conversation
+                else:
+                    # create new conversation
                         cursor = await conn.execute("INSERT INTO conversations (is_group) VALUES (0)")
                         await conn.commit()
-                        conversation_id = cursor.lastrowid
+                    conversation_id = cursor.lastrowid
                         await conn.execute("INSERT INTO conversation_participants (conversation_id, user_id) VALUES (?, ?)", (conversation_id, user_id))
                         await conn.execute("INSERT INTO conversation_participants (conversation_id, user_id) VALUES (?, ?)", (conversation_id, to_user))
                         await conn.commit()
 
-        # Ensure sender is participant
+            # Ensure sender is participant
         if db_type == 'postgresql':
             member = await conn.fetchval(
                 "SELECT 1 FROM conversation_participants WHERE conversation_id=$1 AND user_id=$2",
@@ -831,12 +1362,17 @@ async def send_message(data: MessageSend, user_id: int = Depends(get_current_use
                 member = await cursor.fetchone()
         
         if not member:
-            raise HTTPException(status_code=403, detail="Not a participant")
+                raise HTTPException(status_code=403, detail="Not a participant")
 
         if db_type == 'postgresql':
             await conn.execute(
                 "INSERT INTO messages (conversation_id, sender_id, content) VALUES ($1, $2, $3)",
                 conversation_id, user_id, data.content
+            )
+            # Получаем участников диалога для создания уведомлений
+            participants = await conn.fetch(
+                "SELECT user_id FROM conversation_participants WHERE conversation_id = $1 AND user_id != $2",
+                conversation_id, user_id
             )
         else:  # sqlite
             await conn.execute(
@@ -844,7 +1380,268 @@ async def send_message(data: MessageSend, user_id: int = Depends(get_current_use
                 (conversation_id, user_id, data.content)
             )
             await conn.commit()
-        return {"status": "sent", "conversation_id": conversation_id}
+            # Получаем участников диалога для создания уведомлений
+            async with conn.execute(
+                "SELECT user_id FROM conversation_participants WHERE conversation_id = ? AND user_id != ?",
+                (conversation_id, user_id)
+            ) as cursor:
+                participants_data = await cursor.fetchall()
+                participants = [{"user_id": r[0]} for r in participants_data]
+        
+        # Создаём уведомления для всех участников диалога
+        for participant in participants:
+            await create_notification(
+                user_id=participant["user_id"],
+                notif_type="message",
+                actor_id=user_id,
+                target_id=conversation_id,
+                target_type="conversation",
+                content="отправил(а) вам сообщение"
+            )
+        
+            return {"status": "sent", "conversation_id": conversation_id}
+
+# ===================== Notifications API =====================
+@api_router.get("/notifications")
+async def get_notifications(user_id: int = Depends(get_current_user_id)):
+    """Получить уведомления пользователя"""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            rows = await conn.fetch(
+                """
+                SELECT n.id, n.type, n.actor_id, n.target_id, n.target_type, n.content, n.is_read, n.created_at,
+                       u.username as actor_username, u.avatar_url as actor_avatar
+                FROM notifications n
+                LEFT JOIN users u ON u.id = n.actor_id
+                WHERE n.user_id = $1
+                ORDER BY n.created_at DESC
+                LIMIT 100
+                """,
+                user_id
+            )
+            rows = [dict(r) for r in rows]
+        else:  # sqlite
+            async with conn.execute(
+                """
+                SELECT n.id, n.type, n.actor_id, n.target_id, n.target_type, n.content, n.is_read, n.created_at,
+                       u.username as actor_username, u.avatar_url as actor_avatar
+                FROM notifications n
+                LEFT JOIN users u ON u.id = n.actor_id
+                WHERE n.user_id = ?
+                ORDER BY n.created_at DESC
+                LIMIT 100
+                """,
+                (user_id,)
+            ) as cursor:
+                rows_data = await cursor.fetchall()
+                rows = [
+                    {
+                        "id": r[0],
+                        "type": r[1],
+                        "actor_id": r[2],
+                        "target_id": r[3],
+                        "target_type": r[4],
+                        "content": r[5],
+                        "is_read": bool(r[6]),
+                        "created_at": r[7],
+                        "actor_username": r[8],
+                        "actor_avatar": r[9]
+                    }
+                    for r in rows_data
+                ]
+        return rows
+
+@api_router.post("/notifications/{notification_id}/read")
+async def mark_notification_read(notification_id: int, user_id: int = Depends(get_current_user_id)):
+    """Отметить уведомление как прочитанное"""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            await conn.execute(
+                "UPDATE notifications SET is_read = TRUE WHERE id = $1 AND user_id = $2",
+                notification_id, user_id
+            )
+        else:  # sqlite
+            await conn.execute(
+                "UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?",
+                (notification_id, user_id)
+            )
+            await conn.commit()
+        return {"status": "read"}
+
+@api_router.post("/notifications/read-all")
+async def mark_all_notifications_read(user_id: int = Depends(get_current_user_id)):
+    """Отметить все уведомления как прочитанные"""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            await conn.execute(
+                "UPDATE notifications SET is_read = TRUE WHERE user_id = $1 AND is_read = FALSE",
+                user_id
+            )
+        else:  # sqlite
+            await conn.execute(
+                "UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0",
+                (user_id,)
+            )
+            await conn.commit()
+        return {"status": "all_read"}
+
+@api_router.get("/notifications/unread-count")
+async def get_unread_count(user_id: int = Depends(get_current_user_id)):
+    """Получить количество непрочитанных уведомлений"""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            count = await conn.fetchval(
+                "SELECT COUNT(*) FROM notifications WHERE user_id = $1 AND is_read = FALSE",
+                user_id
+            )
+        else:  # sqlite
+            async with conn.execute(
+                "SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0",
+                (user_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                count = row[0] if row else 0
+        return {"count": count}
+
+# ===================== Friends Requests API =====================
+@api_router.get("/friends/requests")
+async def get_friend_requests(user_id: int = Depends(get_current_user_id)):
+    """Получить заявки в друзья (входящие и исходящие)"""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            # Входящие заявки
+            incoming = await conn.fetch(
+                """
+                SELECT f.id, f.requester_id, f.status, f.created_at,
+                       u.id as user_id, u.username, u.email, u.avatar_url
+                FROM friendships f
+                JOIN users u ON u.id = f.requester_id
+                WHERE f.addressee_id = $1 AND f.status = 'pending'
+                ORDER BY f.created_at DESC
+                """,
+                user_id
+            )
+            # Исходящие заявки
+            outgoing = await conn.fetch(
+                """
+                SELECT f.id, f.addressee_id, f.status, f.created_at,
+                       u.id as user_id, u.username, u.email, u.avatar_url
+                FROM friendships f
+                JOIN users u ON u.id = f.addressee_id
+                WHERE f.requester_id = $1 AND f.status = 'pending'
+                ORDER BY f.created_at DESC
+                """,
+                user_id
+            )
+            incoming = [dict(r) for r in incoming]
+            outgoing = [dict(r) for r in outgoing]
+        else:  # sqlite
+            async with conn.execute(
+                """
+                SELECT f.id, f.requester_id, f.status, f.created_at,
+                       u.id as user_id, u.username, u.email, u.avatar_url
+                FROM friendships f
+                JOIN users u ON u.id = f.requester_id
+                WHERE f.addressee_id = ? AND f.status = 'pending'
+                ORDER BY f.created_at DESC
+                """,
+                (user_id,)
+            ) as cursor:
+                incoming_data = await cursor.fetchall()
+                incoming = [
+                    {
+                        "id": r[0],
+                        "requester_id": r[1],
+                        "status": r[2],
+                        "created_at": r[3],
+                        "user_id": r[4],
+                        "username": r[5],
+                        "email": r[6],
+                        "avatar_url": r[7]
+                    }
+                    for r in incoming_data
+                ]
+            async with conn.execute(
+                """
+                SELECT f.id, f.addressee_id, f.status, f.created_at,
+                       u.id as user_id, u.username, u.email, u.avatar_url
+                FROM friendships f
+                JOIN users u ON u.id = f.addressee_id
+                WHERE f.requester_id = ? AND f.status = 'pending'
+                ORDER BY f.created_at DESC
+                """,
+                (user_id,)
+            ) as cursor:
+                outgoing_data = await cursor.fetchall()
+                outgoing = [
+                    {
+                        "id": r[0],
+                        "addressee_id": r[1],
+                        "status": r[2],
+                        "created_at": r[3],
+                        "user_id": r[4],
+                        "username": r[5],
+                        "email": r[6],
+                        "avatar_url": r[7]
+                    }
+                    for r in outgoing_data
+                ]
+        return {"incoming": incoming, "outgoing": outgoing}
+
+@api_router.get("/friends/suggestions")
+async def get_friend_suggestions(user_id: int = Depends(get_current_user_id)):
+    """Получить рекомендации друзей (пользователи, с которыми еще нет связи)"""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            rows = await conn.fetch(
+                """
+                SELECT u.id, u.username, u.email, u.avatar_url
+                FROM users u
+                WHERE u.id != $1
+                  AND u.id NOT IN (
+                      SELECT CASE WHEN requester_id = $1 THEN addressee_id ELSE requester_id END
+                      FROM friendships
+                      WHERE requester_id = $1 OR addressee_id = $1
+                  )
+                ORDER BY u.created_at DESC
+                LIMIT 20
+                """,
+                user_id
+            )
+            rows = [dict(r) for r in rows]
+        else:  # sqlite
+            async with conn.execute(
+                """
+                SELECT u.id, u.username, u.email, u.avatar_url
+                FROM users u
+                WHERE u.id != ?
+                  AND u.id NOT IN (
+                      SELECT CASE WHEN requester_id = ? THEN addressee_id ELSE requester_id END
+                      FROM friendships
+                      WHERE requester_id = ? OR addressee_id = ?
+                  )
+                ORDER BY u.created_at DESC
+                LIMIT 20
+                """,
+                (user_id, user_id, user_id, user_id)
+            ) as cursor:
+                rows_data = await cursor.fetchall()
+                rows = [
+                    {
+                        "id": r[0],
+                        "username": r[1],
+                        "email": r[2],
+                        "avatar_url": r[3]
+                    }
+                    for r in rows_data
+                ]
+        return rows
 
 # Include the router in the main app
 app.include_router(api_router)

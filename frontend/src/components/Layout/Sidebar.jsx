@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
-import { mockUser } from '../../mock/mockData';
+import { useUser } from '../../context/UserContext';
 import { 
   Home, 
   MessageCircle, 
@@ -12,18 +12,21 @@ import {
   Video, 
   Bookmark,
   Settings,
-  HelpCircle
+  HelpCircle,
+  UserPlus
 } from 'lucide-react';
 
 const Sidebar = () => {
   const location = useLocation();
+  const { user } = useUser();
 
   const menuItems = [
     { icon: Home, label: 'Моя страница', path: '/profile' },
     { icon: Home, label: 'Новости', path: '/' },
-    { icon: MessageCircle, label: 'Сообщения', path: '/messages', badge: 3 },
+    { icon: MessageCircle, label: 'Сообщения', path: '/messages' },
     { icon: Users, label: 'Друзья', path: '/friends' },
-    { icon: Bell, label: 'Уведомления', path: '/notifications', badge: 5 },
+    { icon: UserPlus, label: 'Найти друзей', path: '/find-friends' },
+    { icon: Bell, label: 'Уведомления', path: '/notifications' },
     { icon: Music, label: 'Музыка', path: '/music' },
     { icon: Image, label: 'Фотографии', path: '/photos' },
     { icon: Video, label: 'Видео', path: '/videos' },
@@ -31,21 +34,6 @@ const Sidebar = () => {
     { icon: Settings, label: 'Настройки', path: '/settings' },
     { icon: HelpCircle, label: 'Помощь', path: '/help' },
   ];
-
-  const [avatarSrc, setAvatarSrc] = useState('');
-
-  useEffect(() => {
-    let mounted = true;
-    import('axios').then(({ default: axios }) => {
-      axios.get('/api/users/me/avatar', { responseType: 'blob' })
-        .then((res) => {
-          const url = URL.createObjectURL(res.data);
-          if (mounted) setAvatarSrc(url);
-        })
-        .catch(() => {});
-    });
-    return () => { mounted = false; };
-  }, []);
 
   return (
     <div className="w-64 bg-card border-r border-border h-screen fixed left-0 top-0 pt-4 px-4 overflow-y-auto">
@@ -63,12 +51,12 @@ const Sidebar = () => {
       <div className="mb-6 p-3 bg-muted rounded-lg">
         <Link to="/profile" className="flex items-center space-x-3 hover:opacity-80 transition-opacity">
           <Avatar className="w-10 h-10">
-            <AvatarImage src={avatarSrc || undefined} alt={mockUser.name} />
-            <AvatarFallback>{mockUser.firstName[0]}{mockUser.lastName[0]}</AvatarFallback>
+            <AvatarImage src={user?.avatar_url} alt={user?.username} />
+            <AvatarFallback>{(user?.username || 'U')[0].toUpperCase()}</AvatarFallback>
           </Avatar>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium text-foreground truncate">
-              {mockUser.name}
+              {user?.username || 'Пользователь'}
             </p>
             <p className="text-xs text-green-500">В сети</p>
           </div>

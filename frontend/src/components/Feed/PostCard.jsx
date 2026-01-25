@@ -20,18 +20,23 @@ import {
 const PostCard = ({ post, onLike }) => {
   const [showComments, setShowComments] = useState(false);
 
+  // Поддержка обоих форматов (старый mock и новый API)
+  const authorName = post.author?.name || post.author_username || 'Пользователь';
+  const authorAvatar = post.author?.avatar || post.author_avatar;
+  const timestamp = post.timestamp || (post.created_at ? new Date(post.created_at).toLocaleString('ru-RU') : '');
+
   return (
     <Card className="hover:shadow-md transition-shadow">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-3">
             <Avatar>
-              <AvatarImage src={post.author.avatar} alt={post.author.name} />
-              <AvatarFallback>{post.author.name[0]}</AvatarFallback>
+              <AvatarImage src={authorAvatar} alt={authorName} />
+              <AvatarFallback>{(authorName || 'U')[0].toUpperCase()}</AvatarFallback>
             </Avatar>
             <div>
-              <p className="font-medium text-sm">{post.author.name}</p>
-              <p className="text-xs text-gray-500">{post.timestamp}</p>
+              <p className="font-medium text-sm">{authorName}</p>
+              <p className="text-xs text-gray-500">{timestamp}</p>
             </div>
           </div>
           <DropdownMenu>
@@ -87,10 +92,10 @@ const PostCard = ({ post, onLike }) => {
         {/* Post Stats */}
         <div className="flex items-center justify-between text-sm text-gray-500 mb-3">
           <div className="flex items-center space-x-4">
-            <span>{post.likes} нравится</span>
-            <span>{post.comments} комментариев</span>
+            <span>{post.likes || 0} нравится</span>
+            <span>{post.comments || 0} комментариев</span>
           </div>
-          <span>{post.shares} поделились</span>
+          {post.shares !== undefined && <span>{post.shares} поделились</span>}
         </div>
 
         {/* Action Buttons */}

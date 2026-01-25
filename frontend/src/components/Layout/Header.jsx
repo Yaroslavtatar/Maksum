@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Input } from '../ui/input';
 import { Button } from '../ui/button';
@@ -10,8 +10,8 @@ import {
   DropdownMenuTrigger,
   DropdownMenuSeparator 
 } from '../ui/dropdown-menu';
-import { mockUser } from '../../mock/mockData';
-import axios from 'axios';
+import { useUser } from '../../context/UserContext';
+import api from '../../api/axios';
 import { 
   Search, 
   Bell, 
@@ -24,34 +24,39 @@ import {
 
 const Header = () => {
   const [searchQuery, setSearchQuery] = useState('');
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
   const navigate = useNavigate();
+  const { user, logout } = useUser();
+
+  useEffect(() => {
+    if (user) {
+      fetchUnreadCount();
+      // Обновляем каждые 30 секунд
+      const interval = setInterval(fetchUnreadCount, 30000);
+      return () => clearInterval(interval);
+    }
+  }, [user]);
+
+  const fetchUnreadCount = async () => {
+    try {
+      const res = await api.get('/notifications/unread-count');
+      setUnreadNotifications(res.data.count || 0);
+    } catch (e) {
+      // Игнорируем ошибки
+    }
+  };
 
   const handleSearch = (e) => {
     e.preventDefault();
     if (searchQuery.trim()) {
-      navigate(`/search?q=${encodeURIComponent(searchQuery)}`);
+      navigate(`/find-friends?q=${encodeURIComponent(searchQuery)}`);
+    } else {
+      navigate('/find-friends');
     }
   };
 
-  const [avatarSrc, setAvatarSrc] = useState('');
-
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const res = await axios.get('/api/users/me/avatar', { responseType: 'blob' });
-        const url = URL.createObjectURL(res.data);
-        if (mounted) setAvatarSrc(url);
-      } catch (e) {
-        // ignore; fallback will render
-      }
-    })();
-    return () => { mounted = false; };
-  }, []);
-
   const handleLogout = () => {
-    localStorage.removeItem('token');
-    navigate('/login');
+    logout();
   };
 
   return (
@@ -77,7 +82,15 @@ const Header = () => {
           <Button 
             variant="outline" 
             size="sm"
-            onClick={() => navigate('/create-post')}
+            onClick={() => {
+              // Фокус на поле создания поста на главной странице
+              if (window.location.pathname === '/') {
+                document.querySelector('textarea')?.focus();
+              } else {
+                navigate('/');
+                setTimeout(() => document.querySelector('textarea')?.focus(), 100);
+              }
+            }}
             className="flex items-center space-x-2"
           >
             <Plus className="w-4 h-4" />
@@ -88,19 +101,18 @@ const Header = () => {
           <Link to="/notifications" className="relative">
             <Button variant="ghost" size="sm" className="relative">
               <Bell className="w-5 h-5" />
-              <span className="absolute -top-1 -right-1 bg-destructive text-destructive-foreground text-xs rounded-full w-5 h-5 flex items-center justify-center">
-                5
-              </span>
+              {unreadNotifications > 0 && (
+                <span className="absolute -top-1 -right-1 bg-destructive text-destructive-foreground text-xs rounded-full min-w-[20px] h-5 flex items-center justify-center px-1">
+                  {unreadNotifications > 99 ? '99+' : unreadNotifications}
+                </span>
+              )}
             </Button>
           </Link>
 
           {/* Messages */}
-          <Link to="/messages" className="relative">
-            <Button variant="ghost" size="sm" className="relative">
+          <Link to="/messages">
+            <Button variant="ghost" size="sm">
               <MessageCircle className="w-5 h-5" />
-              <span className="absolute -top-1 -right-1 bg-destructive text-destructive-foreground text-xs rounded-full w-5 h-5 flex items-center justify-center">
-                3
-              </span>
             </Button>
           </Link>
 
@@ -109,17 +121,17 @@ const Header = () => {
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" className="relative h-8 w-8 rounded-full">
                 <Avatar className="h-8 w-8">
-                  <AvatarImage src={avatarSrc || undefined} alt={mockUser.name} />
-                  <AvatarFallback>{mockUser.firstName[0]}</AvatarFallback>
+                  <AvatarImage src={user?.avatar_url} alt={user?.username} />
+                  <AvatarFallback>{(user?.username || 'U')[0].toUpperCase()}</AvatarFallback>
                 </Avatar>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent className="w-56" align="end" forceMount>
               <div className="flex items-center justify-start gap-2 p-2">
                 <div className="flex flex-col space-y-1 leading-none">
-                  <p className="font-medium text-sm">{mockUser.name}</p>
+                  <p className="font-medium text-sm">{user?.username || 'Пользователь'}</p>
                   <p className="w-[200px] truncate text-xs text-muted-foreground">
-                    {mockUser.bio}
+                    {user?.email || ''}
                   </p>
                 </div>
               </div>

@@ -212,6 +212,7 @@ async def init_db():
                     email VARCHAR(255) UNIQUE NOT NULL,
                     password_hash VARCHAR(255) NOT NULL,
                     avatar_url VARCHAR(1024) NULL,
+                    cover_photo VARCHAR(1024) NULL,
                     theme_mode VARCHAR(20) DEFAULT 'light',
                     theme_palette VARCHAR(50) DEFAULT 'blue',
                     created_at TIMESTAMP DEFAULT NOW(),
@@ -272,12 +273,68 @@ async def init_db():
                 )
             """)
             
+            # Таблица уведомлений
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS notifications (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    type VARCHAR(50) NOT NULL,
+                    actor_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    target_id INTEGER,
+                    target_type VARCHAR(50),
+                    content TEXT,
+                    is_read BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            
             # Индексы PostgreSQL
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_friendships_status ON friendships(status)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON messages(conversation_id, created_at)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_status_checks_timestamp ON status_checks(timestamp)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, is_read)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at)")
+            
+            # Таблица постов
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS posts (
+                    id SERIAL PRIMARY KEY,
+                    author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    content TEXT NOT NULL,
+                    images TEXT DEFAULT '[]',
+                    likes_count INTEGER DEFAULT 0,
+                    comments_count INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            
+            # Таблица лайков постов
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS post_likes (
+                    id SERIAL PRIMARY KEY,
+                    post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(post_id, user_id)
+                )
+            """)
+            
+            # Дополнительные поля пользователя
+            try:
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT")
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS location VARCHAR(255)")
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS birth_date VARCHAR(50)")
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS cover_photo VARCHAR(1024)")
+            except:
+                pass
+            
+            # Индексы для постов
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_post_likes_post ON post_likes(post_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_post_likes_user ON post_likes(user_id)")
             
             # Триггеры для updated_at
             await conn.execute("""
@@ -315,6 +372,10 @@ async def init_db():
                     email VARCHAR(255) UNIQUE NOT NULL,
                     password_hash VARCHAR(255) NOT NULL,
                     avatar_url VARCHAR(1024) NULL,
+                    cover_photo VARCHAR(1024) NULL,
+                    bio TEXT NULL,
+                    location VARCHAR(255) NULL,
+                    birth_date VARCHAR(50) NULL,
                     theme_mode VARCHAR(20) DEFAULT 'light',
                     theme_palette VARCHAR(50) DEFAULT 'blue',
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -375,12 +436,77 @@ async def init_db():
                 )
             """)
             
+            # Таблица постов SQLite
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS posts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    author_id INTEGER NOT NULL,
+                    content TEXT NOT NULL,
+                    images TEXT DEFAULT '[]',
+                    likes_count INTEGER DEFAULT 0,
+                    comments_count INTEGER DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+            
+            # Таблица лайков постов SQLite
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS post_likes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    post_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(post_id, user_id),
+                    FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+            
+            # Миграция: добавляем недостающие колонки в users (для существующих БД)
+            try:
+                async with conn.execute("PRAGMA table_info(users)") as cursor:
+                    columns = [row[1] for row in await cursor.fetchall()]
+                if 'bio' not in columns:
+                    await conn.execute("ALTER TABLE users ADD COLUMN bio TEXT NULL")
+                if 'location' not in columns:
+                    await conn.execute("ALTER TABLE users ADD COLUMN location VARCHAR(255) NULL")
+                if 'birth_date' not in columns:
+                    await conn.execute("ALTER TABLE users ADD COLUMN birth_date VARCHAR(50) NULL")
+                if 'cover_photo' not in columns:
+                    await conn.execute("ALTER TABLE users ADD COLUMN cover_photo VARCHAR(1024) NULL")
+            except Exception as e:
+                logger.warning(f"Миграция колонок users: {e}")
+            
+            # Таблица уведомлений SQLite
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS notifications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    type VARCHAR(50) NOT NULL,
+                    actor_id INTEGER,
+                    target_id INTEGER,
+                    target_type VARCHAR(50),
+                    content TEXT,
+                    is_read BOOLEAN DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (actor_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+            
             # Индексы SQLite
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_friendships_status ON friendships(status)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON messages(conversation_id, created_at)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_status_checks_timestamp ON status_checks(timestamp)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_post_likes_post ON post_likes(post_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_post_likes_user ON post_likes(user_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, is_read)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at)")
             
             await conn.commit()
     

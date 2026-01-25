@@ -6,7 +6,43 @@
         <meta name="theme-color" content="#000000" />
         <meta name="description" content="A product of CRYTEAM" />
 
-        <title>VK SOSALA</title>  
+        <title>VK SOSALA</title>
+        
+        <!-- Применяем тему ДО загрузки React, чтобы избежать FOUC -->
+        <script>
+          (function() {
+            try {
+              const saved = localStorage.getItem('maksum-theme');
+              if (saved) {
+                const theme = JSON.parse(saved);
+                const root = document.documentElement;
+                
+                // Удаляем все классы тем
+                root.classList.remove('light', 'dark', 'theme-blue', 'theme-green', 'theme-purple', 
+                  'theme-dark-blue', 'theme-dark-green', 'theme-dark-purple');
+                
+                // Добавляем класс режима
+                if (theme.mode === 'dark') {
+                  root.classList.add('dark');
+                } else {
+                  root.classList.add('light');
+                }
+                
+                // Добавляем класс палитры
+                if (theme.palette) {
+                  const paletteClass = `theme-${theme.palette}`;
+                  root.classList.add(paletteClass);
+                }
+              } else {
+                // Дефолтная тема
+                document.documentElement.classList.add('light');
+              }
+            } catch (e) {
+              // В случае ошибки применяем дефолтную тему
+              document.documentElement.classList.add('light');
+            }
+          })();
+        </script>
     </head>
     <body>
         <div id="root"></div>

@@ -1,37 +1,64 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Button } from '../ui/button';
 import { Textarea } from '../ui/textarea';
 import { Card, CardContent, CardHeader } from '../ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
-import { mockUser, mockPosts, mockCreatePost } from '../../mock/mockData';
-import { Heart, MessageCircle, Share, Image, Video, Smile, Plus } from 'lucide-react';
+import { useUser } from '../../context/UserContext';
+import { Heart, MessageCircle, Share, Image, Video, Smile, Plus, Loader2 } from 'lucide-react';
 import PostCard from './PostCard';
 
 const NewsFeed = () => {
-  const [posts, setPosts] = useState(mockPosts);
+  const { user, feedPosts, fetchFeed, createPost, likePost } = useUser();
   const [newPost, setNewPost] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
-  const handleCreatePost = (e) => {
+  useEffect(() => {
+    const loadFeed = async () => {
+      setIsLoading(true);
+      await fetchFeed();
+      setIsLoading(false);
+    };
+    loadFeed();
+  }, [fetchFeed]);
+
+  const handleCreatePost = async (e) => {
     e.preventDefault();
-    if (newPost.trim()) {
-      const post = mockCreatePost(newPost);
-      setPosts([post, ...posts]);
-      setNewPost('');
+    if (newPost.trim() && !isSubmitting) {
+      setIsSubmitting(true);
+      try {
+        await createPost(newPost);
+        setNewPost('');
+        // Обновляем ленту после создания поста
+        await fetchFeed();
+      } catch (error) {
+        console.error('Error creating post:', error);
+      } finally {
+        setIsSubmitting(false);
+      }
     }
   };
 
-  const handleLikePost = (postId) => {
-    setPosts(posts.map(p => {
-      if (p.id === postId) {
-        return {
-          ...p,
-          liked: !p.liked,
-          likes: p.liked ? p.likes - 1 : p.likes + 1
-        };
-      }
-      return p;
-    }));
+  const handleLikePost = async (postId) => {
+    try {
+      await likePost(postId);
+    } catch (error) {
+      console.error('Error liking post:', error);
+    }
   };
+
+  if (isLoading) {
+    return (
+      <div className="max-w-2xl mx-auto">
+        <Card className="animate-pulse">
+          <CardContent className="py-12 text-center">
+            <Loader2 className="w-8 h-8 animate-spin mx-auto text-blue-500" />
+            <p className="mt-4 text-gray-500">Загрузка ленты...</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
@@ -40,8 +67,8 @@ const NewsFeed = () => {
         <CardHeader className="pb-3">
           <div className="flex items-center space-x-3">
             <Avatar className="animate-scale-hover">
-              <AvatarImage src={mockUser.avatar} alt={mockUser.name} />
-              <AvatarFallback>{mockUser.firstName[0]}</AvatarFallback>
+              <AvatarImage src={user?.avatar_url} alt={user?.username} />
+              <AvatarFallback>{(user?.username || 'U')[0].toUpperCase()}</AvatarFallback>
             </Avatar>
             <div className="flex-1">
               <form onSubmit={handleCreatePost}>
@@ -74,17 +101,24 @@ const NewsFeed = () => {
             </div>
             <Button 
               onClick={handleCreatePost}
-              disabled={!newPost.trim()}
+              disabled={!newPost.trim() || isSubmitting}
               className="bg-blue-500 hover:bg-blue-600 transition-all duration-300 hover:scale-105 disabled:opacity-50 disabled:scale-100"
             >
-              Опубликовать
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Публикация...
+                </>
+              ) : (
+                'Опубликовать'
+              )}
             </Button>
           </div>
         </CardContent>
       </Card>
 
       {/* Empty State */}
-      {posts.length === 0 && (
+      {feedPosts.length === 0 && (
         <Card className="animate-fade-in">
           <CardContent className="text-center py-12">
             <div className="animate-bounce-gentle">
@@ -96,7 +130,7 @@ const NewsFeed = () => {
             </p>
             <div className="space-y-3">
               <Button 
-                onClick={() => document.querySelector('textarea').focus()}
+                onClick={() => document.querySelector('textarea')?.focus()}
                 className="animate-pulse-gentle hover:animate-none"
               >
                 Создать первую запись
@@ -111,7 +145,7 @@ const NewsFeed = () => {
 
       {/* Posts Feed */}
       <div className="space-y-4">
-        {posts.map((post, index) => (
+        {feedPosts.map((post, index) => (
           <div 
             key={post.id} 
             className="animate-slide-up"
@@ -126,10 +160,10 @@ const NewsFeed = () => {
       </div>
 
       {/* Load More (if there are posts) */}
-      {posts.length > 0 && (
+      {feedPosts.length > 0 && (
         <div className="text-center py-8 animate-fade-in">
-          <Button variant="outline" className="w-full animate-scale-hover">
-            Загрузить еще записи
+          <Button variant="outline" className="w-full animate-scale-hover" onClick={fetchFeed}>
+            Обновить ленту
           </Button>
         </div>
       )}

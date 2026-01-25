@@ -5,8 +5,8 @@ import { Input } from '../components/ui/input';
 import { Button } from '../components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '../components/ui/avatar';
 import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
-import { Search, UserPlus } from 'lucide-react';
+import api from '../api/axios';
+import { Search, UserPlus, MessageCircle, Loader2 } from 'lucide-react';
 
 const UsersPage = () => {
   const [query, setQuery] = useState('');
@@ -17,7 +17,7 @@ const UsersPage = () => {
   const fetchUsers = async (q = '') => {
     setLoading(true);
     try {
-      const res = await axios.get('/api/users/search', { params: { q } });
+      const res = await api.get('/users/search', { params: { q } });
       setUsers(res.data || []);
     } catch (e) {
       setUsers([]);
@@ -27,7 +27,15 @@ const UsersPage = () => {
   };
 
   useEffect(() => {
-    fetchUsers('');
+    // Проверяем query параметр из URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const q = urlParams.get('q');
+    if (q) {
+      setQuery(q);
+      fetchUsers(q);
+    } else {
+      fetchUsers('');
+    }
   }, []);
 
   const onSearch = (e) => {
@@ -37,10 +45,24 @@ const UsersPage = () => {
 
   const addFriend = async (userId) => {
     try {
-      await axios.post('/api/friends/request', { user_id: userId });
-      alert('Заявка отправлена');
+      await api.post('/friends/request', { user_id: userId });
+      // Обновляем список, чтобы убрать пользователя из результатов
+      fetchUsers(query);
     } catch (e) {
-      alert('Не удалось отправить заявку');
+      const errorMsg = e.response?.data?.detail || 'Не удалось отправить заявку';
+      alert(errorMsg);
+    }
+  };
+
+  const startChat = async (userId) => {
+    try {
+      await api.post('/messages/send', {
+        to_user_id: userId,
+        content: 'Привет!'
+      });
+      navigate('/messages');
+    } catch (e) {
+      console.error('Error starting chat:', e);
     }
   };
 
@@ -62,31 +84,62 @@ const UsersPage = () => {
 
         <div className="space-y-3">
           {loading && (
-            <Card><CardContent className="py-6 text-center text-muted-foreground">Загрузка...</CardContent></Card>
+            <Card>
+              <CardContent className="py-12 text-center">
+                <Loader2 className="w-8 h-8 animate-spin mx-auto text-primary mb-4" />
+                <p className="text-muted-foreground">Загрузка...</p>
+              </CardContent>
+            </Card>
+          )}
+          {!loading && users.length === 0 && (
+            <Card>
+              <CardContent className="py-12 text-center">
+                <Search className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                <p className="text-muted-foreground">Ничего не найдено</p>
+                <p className="text-sm text-muted-foreground mt-2">Попробуйте изменить поисковый запрос</p>
+              </CardContent>
+            </Card>
           )}
           {!loading && users.map((u) => (
-            <Card key={u.id}>
-              <CardContent className="p-4 flex items-center gap-3">
-                <Avatar className="w-10 h-10">
-                  <AvatarImage src={u.avatar_url || undefined} alt={u.username} />
-                  <AvatarFallback>{(u.username || 'U')[0]}</AvatarFallback>
-                </Avatar>
-                <div className="flex-1 min-w-0">
-                  <div className="font-medium truncate">{u.username}</div>
-                  <div className="text-sm text-muted-foreground truncate">{u.email}</div>
+            <Card key={u.id} className="hover:shadow-md transition-shadow">
+              <CardContent className="p-4">
+                <div className="flex items-center gap-3 mb-3">
+                  <Avatar className="w-12 h-12">
+                    <AvatarImage src={u.avatar_url || undefined} alt={u.username} />
+                    <AvatarFallback>{(u.username || 'U')[0].toUpperCase()}</AvatarFallback>
+                  </Avatar>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium truncate">{u.username}</div>
+                    <div className="text-sm text-muted-foreground truncate">{u.email}</div>
+                  </div>
                 </div>
                 <div className="flex gap-2">
-                  <Button variant="outline" onClick={() => navigate(`/users/${u.id}`)}>Открыть</Button>
-                  <Button onClick={() => addFriend(u.id)}>
-                    <UserPlus className="w-4 h-4 mr-2" />В друзья
+                  <Button 
+                    variant="outline" 
+                    size="sm"
+                    className="flex-1"
+                    onClick={() => navigate(`/users/${u.id}`)}
+                  >
+                    Профиль
+                  </Button>
+                  <Button 
+                    size="sm"
+                    variant="outline"
+                    onClick={() => startChat(u.id)}
+                  >
+                    <MessageCircle className="w-4 h-4" />
+                  </Button>
+                  <Button 
+                    size="sm"
+                    onClick={() => addFriend(u.id)}
+                  >
+                    <UserPlus className="w-4 h-4 mr-2" />
+                    В друзья
                   </Button>
                 </div>
               </CardContent>
             </Card>
           ))}
-          {!loading && users.length === 0 && (
-            <Card><CardContent className="py-6 text-center text-muted-foreground">Ничего не найдено</CardContent></Card>
-          )}
         </div>
       </div>
     </MainLayout>
