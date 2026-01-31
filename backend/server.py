@@ -1,9 +1,10 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Response, UploadFile, File
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Response, UploadFile, File, Query
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import RedirectResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 import os
 import logging
 from pathlib import Path
@@ -199,10 +200,17 @@ class UserFullProfile(BaseModel):
     posts_count: int = 0
     is_online: bool = True
 
+# Максимальный limit для пагинации (защита от тяжёлых запросов)
+PAGINATION_MAX_LIMIT = 100
+
 # Startup event
 @app.on_event("startup")
 async def startup_event():
     """Инициализация при старте приложения"""
+    if os.getenv("JWT_SECRET") in (None, "", "dev_secret_change_me"):
+        logging.warning(
+            "JWT_SECRET is default or unset. Set JWT_SECRET in production!"
+        )
     await init_db()
     db_type = get_db_type()
     logging.info(f"Database initialized: {db_type}")
@@ -369,15 +377,12 @@ async def login_user(data: LoginInput):
     db_type = get_db_type()
     async with get_db() as conn:
         if db_type == 'postgresql':
-            row = await conn.fetchrow(
+            user = await conn.fetchrow(
                 "SELECT id, password_hash, is_banned FROM users WHERE username = $1 OR email = $1",
                 data.username_or_email
             )
-            if not row:
-                raise HTTPException(status_code=401, detail="Invalid credentials")
-            user = dict(row)
-            if not verify_password(data.password, user["password_hash"]):
-                raise HTTPException(status_code=401, detail="Invalid credentials")
+            if user:
+                user = dict(user)
         else:
             async with conn.execute(
                 "SELECT id, password_hash, is_banned FROM users WHERE username = ? OR email = ?",
@@ -392,8 +397,8 @@ async def login_user(data: LoginInput):
                 raise HTTPException(status_code=401, detail="Invalid credentials")
         if user.get("is_banned"):
             raise HTTPException(status_code=403, detail="Account is banned")
-        token = create_access_token({"sub": str(user["id"])})
-        return TokenResponse(access_token=token)
+            token = create_access_token({"sub": str(user["id"])})
+            return TokenResponse(access_token=token)
 
 # ===================== Users API =====================
 @api_router.get("/users/me")
@@ -1626,7 +1631,10 @@ async def my_subscriptions(user_id: int = Depends(get_current_user_id)):
 
 # ===================== Recommendations API =====================
 @api_router.get("/recommendations/posts")
-async def get_recommended_posts(user_id: int = Depends(get_current_user_id), limit: int = 50):
+async def get_recommended_posts(
+    user_id: int = Depends(get_current_user_id),
+    limit: int = Query(50, ge=1, le=PAGINATION_MAX_LIMIT),
+):
     """
     Рекомендации постов по интересам:
     - теги, на которые подписан пользователь;
@@ -2325,8 +2333,8 @@ async def admin_stats(_admin_id: int = Depends(get_current_admin)):
 
 @api_router.get("/admin/users")
 async def admin_list_users(
-    skip: int = 0,
-    limit: int = 50,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=PAGINATION_MAX_LIMIT),
     search: Optional[str] = None,
     _admin_id: int = Depends(get_current_admin),
 ):
@@ -2415,8 +2423,8 @@ async def admin_update_user(user_id: int, data: AdminUserUpdate, _admin_id: int 
 
 @api_router.get("/admin/posts")
 async def admin_list_posts(
-    skip: int = 0,
-    limit: int = 50,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=PAGINATION_MAX_LIMIT),
     _admin_id: int = Depends(get_current_admin),
 ):
     """Все посты для модерации."""
@@ -2453,8 +2461,8 @@ async def admin_delete_post(post_id: int, _admin_id: int = Depends(get_current_a
 
 @api_router.get("/admin/communities")
 async def admin_list_communities(
-    skip: int = 0,
-    limit: int = 50,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=PAGINATION_MAX_LIMIT),
     _admin_id: int = Depends(get_current_admin),
 ):
     """Пользователи с заполненным сообществом (community_name)."""
@@ -2477,6 +2485,23 @@ async def admin_list_communities(
             out = [{"id": r[0], "username": r[1], "email": r[2], "avatar_url": r[3], "community_name": r[4], "community_description": r[5] if len(r) > 5 else None} for r in rows]
     return {"communities": out, "skip": skip, "limit": limit}
 
+
+# ===================== Health (для мониторинга и load balancer) =====================
+@api_router.get("/health")
+async def health():
+    """Проверка доступности API и БД. Возвращает 200 при успехе."""
+    try:
+        async with get_db() as conn:
+            if get_db_type() == "postgresql":
+                await conn.fetchval("SELECT 1")
+            else:
+                await conn.execute("SELECT 1")
+        return {"status": "ok", "database": get_db_type()}
+    except Exception as e:
+        logging.exception("Health check failed: %s", e)
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+
 # Include the router in the main app
 app.include_router(api_router)
 
@@ -2487,6 +2512,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Добавляет заголовки безопасности к ответам."""
+
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Configure logging
 logging.basicConfig(
