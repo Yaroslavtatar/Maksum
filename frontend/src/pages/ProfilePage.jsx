@@ -245,7 +245,7 @@ const ProfilePage = () => {
               <TabsContent value="posts" className="space-y-4">
                 {posts.length > 0 ? (
                   posts.map((post) => (
-                    <PostCard key={post.id} post={post} onLike={() => handleLike(post.id)} />
+                    <PostCard key={post.id} post={post} onLike={() => handleLike(post.id)} onCommentAdded={fetchMyPosts} />
                   ))
                 ) : (
                   <Card>

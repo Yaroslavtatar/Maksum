@@ -137,7 +137,7 @@ const Header = () => {
               </div>
               <DropdownMenuSeparator />
               <DropdownMenuItem asChild>
-                <Link to="/profile" className="flex items-center">
+                <Link to={user ? `/profile/@${user.username}` : '/profile'} className="flex items-center">
                   <User className="mr-2 h-4 w-4" />
                   <span>Профиль</span>
                 </Link>

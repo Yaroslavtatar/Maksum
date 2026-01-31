@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import { Dialog, DialogContent } from '../ui/dialog';
 import { Button } from '../ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
-import { Badge } from '../ui/badge';
 import api from '../../api/axios';
 import {
   Phone,
@@ -11,7 +10,6 @@ import {
   User,
   ExternalLink,
   Loader2,
-  Shield,
 } from 'lucide-react';
 
 const ACCENT_COLORS = {
@@ -48,7 +46,11 @@ const UserPreviewModal = ({ userId, open, onClose }) => {
 
   const handleOpenFull = () => {
     onClose();
-    navigate(`/users/${userId}`);
+    if (user?.username) {
+      navigate(`/profile/@${user.username}`);
+    } else {
+      navigate(`/users/${userId}`);
+    }
   };
 
   const accentClass = user?.profile_accent && ACCENT_COLORS[user.profile_accent]
@@ -75,10 +77,6 @@ const UserPreviewModal = ({ userId, open, onClose }) => {
               </Avatar>
               <div className="mt-3 flex items-center gap-2 flex-wrap">
                 <h2 className="text-xl font-bold text-foreground">{user.username}</h2>
-                <Badge variant="outline" className="text-green-600 border-green-600 text-xs flex items-center gap-1">
-                  <Shield className="w-3 h-3" />
-                  В сети
-                </Badge>
               </div>
 
               <div className="mt-5 space-y-4 text-sm">

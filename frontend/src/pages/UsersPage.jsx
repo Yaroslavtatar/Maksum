@@ -4,53 +4,51 @@ import { Card, CardContent } from '../components/ui/card';
 import { Input } from '../components/ui/input';
 import { Button } from '../components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '../components/ui/avatar';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../api/axios';
-import { Search, UserPlus, MessageCircle, Loader2 } from 'lucide-react';
+import { Search, UserPlus, MessageCircle, Loader2, AlertCircle } from 'lucide-react';
 
 const UsersPage = () => {
-  const [query, setQuery] = useState('');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlQ = searchParams.get('q') || '';
+  const [query, setQuery] = useState(urlQ);
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
   const navigate = useNavigate();
 
   const fetchUsers = async (q = '') => {
+    setError('');
     setLoading(true);
     try {
-      const res = await api.get('/users/search', { params: { q } });
-      setUsers(res.data || []);
+      const res = await api.get('/users/search', { params: { q: q || undefined } });
+      setUsers(Array.isArray(res.data) ? res.data : []);
     } catch (e) {
       setUsers([]);
+      const msg = e?.response?.data?.detail || e?.message || 'Ошибка поиска';
+      setError(Array.isArray(msg) ? msg[0]?.msg || 'Ошибка' : msg);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    // Проверяем query параметр из URL
-    const urlParams = new URLSearchParams(window.location.search);
-    const q = urlParams.get('q');
-    if (q) {
-      setQuery(q);
-      fetchUsers(q);
-    } else {
-      fetchUsers('');
-    }
-  }, []);
+    setQuery(urlQ);
+    fetchUsers(urlQ);
+  }, [urlQ]);
 
   const onSearch = (e) => {
     e.preventDefault();
-    fetchUsers(query);
+    setSearchParams(query.trim() ? { q: query.trim() } : {});
   };
 
   const addFriend = async (userId) => {
     try {
       await api.post('/friends/request', { user_id: userId });
-      // Обновляем список, чтобы убрать пользователя из результатов
-      fetchUsers(query);
+      fetchUsers(urlQ);
     } catch (e) {
-      const errorMsg = e.response?.data?.detail || 'Не удалось отправить заявку';
-      alert(errorMsg);
+      const errorMsg = e?.response?.data?.detail || 'Не удалось отправить заявку';
+      setError(typeof errorMsg === 'string' ? errorMsg : JSON.stringify(errorMsg));
     }
   };
 
@@ -74,13 +72,20 @@ const UsersPage = () => {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground w-4 h-4" />
             <Input
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Поиск людей по имени или email"
+              onChange={(e) => { setQuery(e.target.value); setError(''); }}
+              placeholder="Поиск людей по логину или email"
               className="pl-9"
             />
           </div>
-          <Button type="submit">Найти</Button>
+          <Button type="submit" disabled={loading}>Найти</Button>
         </form>
+
+        {error && (
+          <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 rounded-lg flex items-center gap-2 text-destructive text-sm">
+            <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            {error}
+          </div>
+        )}
 
         <div className="space-y-3">
           {loading && (
@@ -118,7 +123,7 @@ const UsersPage = () => {
                     variant="outline" 
                     size="sm"
                     className="flex-1"
-                    onClick={() => navigate(`/users/${u.id}`)}
+                    onClick={() => navigate(u.username ? `/profile/@${u.username}` : `/users/${u.id}`)}
                   >
                     Профиль
                   </Button>

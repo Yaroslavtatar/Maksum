@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader } from '../ui/card';
 import { Button } from '../ui/button';
+import { Input } from '../ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
 import { 
   Heart, 
@@ -8,7 +9,8 @@ import {
   Share, 
   MoreHorizontal,
   Bookmark,
-  Flag
+  Flag,
+  Send
 } from 'lucide-react';
 import {
   DropdownMenu,
@@ -16,9 +18,44 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu';
+import api from '../../api/axios';
+import { useUser } from '../../context/UserContext';
 
-const PostCard = ({ post, onLike, onAuthorClick }) => {
+const PostCard = ({ post, onLike, onAuthorClick, onCommentAdded }) => {
+  const { user } = useUser();
   const [showComments, setShowComments] = useState(false);
+  const [comments, setComments] = useState([]);
+  const [commentText, setCommentText] = useState('');
+  const [commentsLoading, setCommentsLoading] = useState(false);
+  const [sendingComment, setSendingComment] = useState(false);
+
+  useEffect(() => {
+    if (!showComments || !post?.id) return;
+    let cancelled = false;
+    setCommentsLoading(true);
+    api.get(`/posts/${post.id}/comments`)
+      .then((res) => { if (!cancelled) setComments(Array.isArray(res.data) ? res.data : []); })
+      .catch(() => { if (!cancelled) setComments([]); })
+      .finally(() => { if (!cancelled) setCommentsLoading(false); });
+    return () => { cancelled = true; };
+  }, [showComments, post?.id]);
+
+  const handleAddComment = async (e) => {
+    e.preventDefault();
+    if (!commentText.trim() || sendingComment || !post?.id) return;
+    setSendingComment(true);
+    try {
+      await api.post(`/posts/${post.id}/comments`, { content: commentText.trim() });
+      setCommentText('');
+      const res = await api.get(`/posts/${post.id}/comments`);
+      setComments(Array.isArray(res.data) ? res.data : []);
+      onCommentAdded?.();
+    } catch (err) {
+      console.error('Error adding comment:', err);
+    } finally {
+      setSendingComment(false);
+    }
+  };
 
   // Поддержка обоих форматов (старый mock и новый API)
   const authorName = post.author?.name || post.author_username || 'Пользователь';
@@ -147,10 +184,44 @@ const PostCard = ({ post, onLike, onAuthorClick }) => {
 
         {/* Comments Section */}
         {showComments && (
-          <div className="mt-4 pt-4 border-t">
-            <div className="text-sm text-gray-500 text-center py-4">
-              Здесь будут отображаться комментарии...
-            </div>
+          <div className="mt-4 pt-4 border-t space-y-3">
+            {commentsLoading ? (
+              <p className="text-sm text-muted-foreground text-center py-2">Загрузка комментариев...</p>
+            ) : (
+              <>
+                <ul className="space-y-2">
+                  {comments.map((c) => (
+                    <li key={c.id} className="flex gap-2 items-start text-sm">
+                      <Avatar className="h-6 w-6 shrink-0 mt-0.5">
+                        <AvatarImage src={c.avatar_url} />
+                        <AvatarFallback className="text-xs">{(c.username || 'U')[0]}</AvatarFallback>
+                      </Avatar>
+                      <div className="flex-1 min-w-0">
+                        <span className="font-medium text-foreground">{c.username}</span>
+                        <span className="text-muted-foreground ml-1">{c.content}</span>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {c.created_at ? new Date(c.created_at).toLocaleString('ru-RU') : ''}
+                        </p>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+                {user && (
+                  <form onSubmit={handleAddComment} className="flex gap-2">
+                    <Input
+                      placeholder="Написать комментарий..."
+                      value={commentText}
+                      onChange={(e) => setCommentText(e.target.value)}
+                      className="flex-1"
+                      disabled={sendingComment}
+                    />
+                    <Button type="submit" size="sm" disabled={sendingComment || !commentText.trim()}>
+                      <Send className="w-4 h-4" />
+                    </Button>
+                  </form>
+                )}
+              </>
+            )}
           </div>
         )}
       </CardContent>

@@ -151,6 +151,7 @@ const NewsFeed = () => {
               post={post} 
               onLike={() => handleLikePost(post.id)}
               onAuthorClick={post.author_id !== user?.id ? setPreviewUserId : undefined}
+              onCommentAdded={fetchFeed}
             />
           </div>
         ))}

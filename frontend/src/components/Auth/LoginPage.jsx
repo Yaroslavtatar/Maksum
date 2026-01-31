@@ -27,8 +27,7 @@ const LoginPage = () => {
   });
   
   const [registerData, setRegisterData] = useState({
-    firstName: '',
-    lastName: '',
+    username: '',
     email: '',
     password: '',
     confirmPassword: ''
@@ -81,22 +80,23 @@ const LoginPage = () => {
       setError('Пароль должен быть не менее 6 символов');
       return;
     }
-    
-    if (!registerData.firstName || !registerData.lastName) {
-      setError('Заполните все поля');
+    const usernameRegex = /^[a-zA-Z0-9_]{3,30}$/;
+    if (!registerData.username || !usernameRegex.test(registerData.username.trim())) {
+      setError('Логин: только латиница, цифры и _; от 3 до 30 символов');
       return;
     }
-    
+    const emailRegex = /^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$/;
+    if (!registerData.email || !emailRegex.test(registerData.email.trim())) {
+      setError('Введите корректный адрес электронной почты');
+      return;
+    }
+
     setLoading(true);
 
     try {
-      // Генерируем username из имени и фамилии
-      const username = `${registerData.firstName.toLowerCase()}_${registerData.lastName.toLowerCase()}_${Math.random().toString(36).slice(2, 7)}`;
-      
-      // Регистрация
       const registerResponse = await axios.post(`${API}/auth/register`, {
-        username: username,
-        email: registerData.email,
+        username: registerData.username.trim(),
+        email: registerData.email.trim().toLowerCase(),
         password: registerData.password,
       });
       
@@ -124,7 +124,10 @@ const LoginPage = () => {
         }, 1000);
       }
     } catch (err) {
-      const errorMsg = err?.response?.data?.detail || err?.message || 'Ошибка регистрации. Попробуйте позже.';
+      const detail = err?.response?.data?.detail;
+      const errorMsg = Array.isArray(detail)
+        ? (detail[0]?.msg || detail[0]?.loc?.join(' ') || String(detail))
+        : (detail || err?.message || 'Ошибка регистрации. Попробуйте позже.');
       setError(errorMsg);
       console.error('Register error:', err);
       setLoading(false);
@@ -273,34 +276,24 @@ const LoginPage = () => {
               
               <TabsContent value="register" className="space-y-4 mt-6">
                 <form onSubmit={handleRegister} className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="firstName" className="flex items-center gap-2">
-                        <User className="w-4 h-4" />
-                        Имя
-                      </Label>
-                      <Input
-                        id="firstName"
-                        placeholder="Иван"
-                        value={registerData.firstName}
-                        onChange={(e) => setRegisterData({...registerData, firstName: e.target.value})}
-                        required
-                        disabled={loading}
-                        className="h-11"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="lastName">Фамилия</Label>
-                      <Input
-                        id="lastName"
-                        placeholder="Иванов"
-                        value={registerData.lastName}
-                        onChange={(e) => setRegisterData({...registerData, lastName: e.target.value})}
-                        required
-                        disabled={loading}
-                        className="h-11"
-                      />
-                    </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="username" className="flex items-center gap-2">
+                      <User className="w-4 h-4" />
+                      Логин (только латиница, цифры и _)
+                    </Label>
+                    <Input
+                      id="username"
+                      type="text"
+                      placeholder="my_username"
+                      value={registerData.username}
+                      onChange={(e) => setRegisterData({...registerData, username: e.target.value})}
+                      required
+                      disabled={loading}
+                      minLength={3}
+                      maxLength={30}
+                      className="h-11"
+                      autoComplete="username"
+                    />
                   </div>
                   
                   <div className="space-y-2">

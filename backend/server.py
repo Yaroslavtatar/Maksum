@@ -7,8 +7,9 @@ from starlette.responses import RedirectResponse
 import os
 import logging
 from pathlib import Path
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
+import re
 import uuid
 from datetime import datetime, timedelta
 import json
@@ -56,10 +57,40 @@ class UserPublic(BaseModel):
     email: str
     avatar_url: Optional[str] = None
 
+# Валидация: username только латиница, цифры, подчёркивание; 3–30 символов
+USERNAME_PATTERN = re.compile(r"^[a-zA-Z0-9_]{3,30}$")
+# Упрощённая проверка легитимности почты (формат)
+EMAIL_PATTERN = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
+
 class RegisterInput(BaseModel):
     username: str
-    email: str
+    email: str  # проверяется validator'ом
     password: str
+
+    @field_validator("username")
+    @classmethod
+    def username_english_only(cls, v: str) -> str:
+        if not v or len(v) < 3 or len(v) > 30:
+            raise ValueError("Username must be 3–30 characters")
+        if not USERNAME_PATTERN.match(v):
+            raise ValueError("Username must contain only English letters, numbers and underscore")
+        return v.strip()
+
+    @field_validator("email")
+    @classmethod
+    def email_valid(cls, v: str) -> str:
+        if not v or len(v) > 255:
+            raise ValueError("Invalid email")
+        if not EMAIL_PATTERN.match(v.strip()):
+            raise ValueError("Invalid email format")
+        return v.strip().lower()
+
+    @field_validator("password")
+    @classmethod
+    def password_length(cls, v: str) -> str:
+        if not v or len(v) < 6:
+            raise ValueError("Password must be at least 6 characters")
+        return v
 
 class LoginInput(BaseModel):
     username_or_email: str
@@ -88,6 +119,7 @@ class UserSearchResponse(BaseModel):
     username: str
     email: str
     avatar_url: Optional[str] = None
+    status: str = "offline"  # online | inactive | offline
 
 class FriendAction(BaseModel):
     user_id: int
@@ -116,6 +148,18 @@ class PostResponse(BaseModel):
     created_at: datetime
     tags: List[dict] = []
 
+class CommentCreate(BaseModel):
+    content: str
+
+class CommentResponse(BaseModel):
+    id: int
+    post_id: int
+    user_id: int
+    username: str
+    avatar_url: Optional[str] = None
+    content: str
+    created_at: datetime
+
 class TagResponse(BaseModel):
     id: int
     name: str
@@ -137,6 +181,10 @@ class UserProfileUpdate(BaseModel):
 
 class ImageUpload(BaseModel):
     image_url: str  # URL или base64 data URL
+
+class AdminUserUpdate(BaseModel):
+    is_banned: Optional[bool] = None
+    is_admin: Optional[bool] = None
 
 class UserFullProfile(BaseModel):
     id: int
@@ -191,6 +239,25 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALG)
 
+def get_status_from_last_seen(last_seen) -> str:
+    """online = последние 5 мин, inactive = 5–30 мин, offline = >30 мин или NULL."""
+    if last_seen is None:
+        return "offline"
+    try:
+        if hasattr(last_seen, "timestamp"):
+            ts = last_seen.timestamp()
+        else:
+            ts = (last_seen - datetime(1970, 1, 1)).total_seconds() if hasattr(last_seen, "__sub__") else 0
+        now_ts = datetime.utcnow().timestamp()
+        delta = now_ts - ts
+        if delta <= 300:
+            return "online"
+        if delta <= 1800:
+            return "inactive"
+    except Exception:
+        pass
+    return "offline"
+
 async def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depends(security)) -> int:
     """Получить ID текущего пользователя из JWT"""
     token = credentials.credentials
@@ -199,16 +266,36 @@ async def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depend
         user_id = int(payload.get("sub"))
     except (JWTError, ValueError):
         raise HTTPException(status_code=401, detail="Invalid token")
-    # Доп. проверка, что пользователь существует
     db_type = get_db_type()
     async with get_db() as conn:
         if db_type == 'postgresql':
             row = await conn.fetchrow("SELECT id FROM users WHERE id = $1", user_id)
-        else:  # sqlite
+        else:
             async with conn.execute("SELECT id FROM users WHERE id = ?", (user_id,)) as cursor:
                 row = await cursor.fetchone()
-            if not row:
-                raise HTTPException(status_code=401, detail="User not found")
+        if not row:
+            raise HTTPException(status_code=401, detail="User not found")
+    return user_id
+
+
+async def get_current_admin(user_id: int = Depends(get_current_user_id)) -> int:
+    """Только для администраторов; иначе 403. ВРЕМЕННО: всем авторизованным даём доступ к админке."""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            r = await conn.fetchrow("SELECT is_admin, is_banned FROM users WHERE id = $1", user_id)
+            row = dict(r) if r else None
+        else:
+            async with conn.execute("SELECT is_admin, is_banned FROM users WHERE id = ?", (user_id,)) as cursor:
+                r = await cursor.fetchone()
+                row = {"is_admin": bool(r[0]) if r and len(r) > 0 else False, "is_banned": bool(r[1]) if r and len(r) > 1 else False} if r else None
+        if not row:
+            raise HTTPException(status_code=404, detail="User not found")
+        if row.get("is_banned"):
+            raise HTTPException(status_code=403, detail="Account is banned")
+        # ВРЕМЕННО отключено: любой авторизованный = админ. Вернуть проверку: if not row.get("is_admin"): raise ...
+        # if not row.get("is_admin"):
+        #     raise HTTPException(status_code=403, detail="Admin access required")
     return user_id
 
 
@@ -246,66 +333,61 @@ async def root():
 async def register_user(data: RegisterInput):
     db_type = get_db_type()
     async with get_db() as conn:
-        # Проверяем уникальность
         if db_type == 'postgresql':
             exists = await conn.fetchrow(
                 "SELECT id FROM users WHERE username = $1 OR email = $2",
                 data.username, data.email
             )
-        else:  # sqlite
+        else:
             async with conn.execute(
                 "SELECT id FROM users WHERE username = ? OR email = ?",
                 (data.username, data.email)
             ) as cursor:
                 exists = await cursor.fetchone()
-        
-            if exists:
-                raise HTTPException(status_code=400, detail="Username or email already in use")
-        
-            pw_hash = hash_password(data.password)
-        
+        if exists:
+            raise HTTPException(status_code=400, detail="Username or email already in use")
+        pw_hash = hash_password(data.password)
         if db_type == 'postgresql':
             user_id = await conn.fetchval(
                 "INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id",
                 data.username, data.email, pw_hash
             )
-        else:  # sqlite
+        else:
             cursor = await conn.execute(
                 "INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)",
                 (data.username, data.email, pw_hash)
             )
             await conn.commit()
             user_id = cursor.lastrowid
-        
-            return UserPublic(id=user_id, username=data.username, email=data.email, avatar_url=None)
+        return UserPublic(id=user_id, username=data.username, email=data.email, avatar_url=None)
 
 @api_router.post("/auth/login", response_model=TokenResponse)
 async def login_user(data: LoginInput):
     db_type = get_db_type()
     async with get_db() as conn:
-        # Находим по username или email
         if db_type == 'postgresql':
             user = await conn.fetchrow(
-                "SELECT id, password_hash FROM users WHERE username = $1 OR email = $1",
+                "SELECT id, password_hash, is_banned FROM users WHERE username = $1 OR email = $1",
                 data.username_or_email
             )
             if user:
                 user = dict(user)
-        else:  # sqlite
+        else:
             async with conn.execute(
-                "SELECT id, password_hash FROM users WHERE username = ? OR email = ?",
+                "SELECT id, password_hash, is_banned FROM users WHERE username = ? OR email = ?",
                 (data.username_or_email, data.username_or_email)
             ) as cursor:
                 row = await cursor.fetchone()
                 if row:
-                    user = {"id": row[0], "password_hash": row[1]}
+                    user = {"id": row[0], "password_hash": row[1], "is_banned": bool(row[2]) if len(row) > 2 else False}
                 else:
                     user = None
-        
-            if not user or not verify_password(data.password, user["password_hash"]):
-                raise HTTPException(status_code=401, detail="Invalid credentials")
-            token = create_access_token({"sub": str(user["id"])})
-            return TokenResponse(access_token=token)
+        if not user or not verify_password(data.password, user["password_hash"]):
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        if user.get("is_banned"):
+            raise HTTPException(status_code=403, detail="Account is banned")
+        token = create_access_token({"sub": str(user["id"])})
+        return TokenResponse(access_token=token)
 
 # ===================== Users API =====================
 @api_router.get("/users/me")
@@ -315,15 +397,64 @@ async def get_me(user_id: int = Depends(get_current_user_id)):
     async with get_db() as conn:
         if db_type == 'postgresql':
             row = await conn.fetchrow(
-                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description FROM users WHERE id = $1",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, is_admin, is_banned FROM users WHERE id = $1",
                 user_id
             )
             if row:
                 row = dict(row)
         else:  # sqlite
             async with conn.execute(
-                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description FROM users WHERE id = ?",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, is_admin, is_banned FROM users WHERE id = ?",
                 (user_id,)
+            ) as cursor:
+                row_data = await cursor.fetchone()
+                if row_data:
+                    row = {
+                        "id": row_data[0],
+                        "username": row_data[1],
+                        "email": row_data[2],
+                        "avatar_url": row_data[3],
+                        "cover_photo": row_data[4] if len(row_data) > 4 else None,
+                        "bio": row_data[5] if len(row_data) > 5 else None,
+                        "location": row_data[6] if len(row_data) > 6 else None,
+                        "birth_date": row_data[7] if len(row_data) > 7 else None,
+                        "phone": row_data[8] if len(row_data) > 8 else None,
+                        "work_hours": row_data[9] if len(row_data) > 9 else None,
+                        "profile_accent": row_data[10] if len(row_data) > 10 else None,
+                        "community_name": row_data[11] if len(row_data) > 11 else None,
+                        "community_description": row_data[12] if len(row_data) > 12 else None,
+                        "is_admin": bool(row_data[13]) if len(row_data) > 13 else False,
+                        "is_banned": bool(row_data[14]) if len(row_data) > 14 else False,
+                    }
+                else:
+                    row = None
+        if not row:
+            raise HTTPException(status_code=404, detail="User not found")
+        # Не отдаём is_admin/is_banned в публичные эндпоинты — только в /users/me; для postgres row уже dict
+        if db_type == 'postgresql' and row:
+            row.setdefault("is_admin", False)
+            row.setdefault("is_banned", False)
+        return row
+
+@api_router.get("/users/username/{username}")
+async def get_user_by_username(username: str, _uid: int = Depends(get_current_user_id)):
+    """Получить данные пользователя по username (для /profile/@username)"""
+    username = username.lstrip('@').strip()
+    if not username:
+        raise HTTPException(status_code=404, detail="User not found")
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            row = await conn.fetchrow(
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description FROM users WHERE username = $1",
+                username
+            )
+            if row:
+                row = dict(row)
+        else:  # sqlite
+            async with conn.execute(
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description FROM users WHERE username = ?",
+                (username,)
             ) as cursor:
                 row_data = await cursor.fetchone()
                 if row_data:
@@ -344,10 +475,55 @@ async def get_me(user_id: int = Depends(get_current_user_id)):
                     }
                 else:
                     row = None
-        
-            if not row:
-                raise HTTPException(status_code=404, detail="User not found")
-        return row
+        if not row:
+            raise HTTPException(status_code=404, detail="User not found")
+    return row
+
+
+@api_router.get("/users/search", response_model=List[UserSearchResponse])
+async def search_users(q: Optional[str] = None, _uid: int = Depends(get_current_user_id)):
+    """Поиск пользователей по логину/email. Пустой q — возвращает рекомендации (кроме себя)."""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            if q and q.strip():
+                like = f"%{q.strip()}%"
+                rows = await conn.fetch(
+                    """SELECT id, username, email, avatar_url FROM users
+                       WHERE id != $1 AND (is_banned IS NOT TRUE OR is_banned IS NULL)
+                       AND (username ILIKE $2 OR email ILIKE $2) ORDER BY username LIMIT 50""",
+                    _uid, like
+                )
+            else:
+                rows = await conn.fetch(
+                    """SELECT id, username, email, avatar_url FROM users
+                       WHERE id != $1 AND (is_banned IS NOT TRUE OR is_banned IS NULL)
+                       ORDER BY id DESC LIMIT 50""",
+                    _uid
+                )
+            rows = [dict(r) for r in rows]
+        else:
+            if q and q.strip():
+                like = f"%{q.strip()}%"
+                async with conn.execute(
+                    """SELECT id, username, email, avatar_url FROM users
+                       WHERE id != ? AND (is_banned = 0 OR is_banned IS NULL)
+                       AND (username LIKE ? OR email LIKE ?) ORDER BY username LIMIT 50""",
+                    (_uid, like, like)
+                ) as cursor:
+                    rows_data = await cursor.fetchall()
+                    rows = [{"id": r[0], "username": r[1], "email": r[2], "avatar_url": r[3]} for r in rows_data]
+            else:
+                async with conn.execute(
+                    """SELECT id, username, email, avatar_url FROM users
+                       WHERE id != ? AND (is_banned = 0 OR is_banned IS NULL)
+                       ORDER BY id DESC LIMIT 50""",
+                    (_uid,)
+                ) as cursor:
+                    rows_data = await cursor.fetchall()
+                    rows = [{"id": r[0], "username": r[1], "email": r[2], "avatar_url": r[3]} for r in rows_data]
+        return [UserSearchResponse(**r) for r in rows]
+
 
 @api_router.get("/users/{id}")
 async def get_user_by_id(id: int, _uid: int = Depends(get_current_user_id)):
@@ -386,8 +562,8 @@ async def get_user_by_id(id: int, _uid: int = Depends(get_current_user_id)):
                 else:
                     row = None
         
-            if not row:
-                raise HTTPException(status_code=404, detail="User not found")
+        if not row:
+            raise HTTPException(status_code=404, detail="User not found")
         return row
 
 @api_router.put("/users/me", response_model=UserPublic)
@@ -529,34 +705,6 @@ async def update_me(data: UserUpdate, user_id: int = Depends(get_current_user_id
         if not row:
             raise HTTPException(status_code=404, detail="User not found")
         return row
-
-@api_router.get("/users/search", response_model=List[UserSearchResponse])
-async def search_users(q: str, _uid: int = Depends(get_current_user_id)):
-    like = f"%{q}%"
-    db_type = get_db_type()
-    async with get_db() as conn:
-        if db_type == 'postgresql':
-            rows = await conn.fetch(
-                "SELECT id, username, email, avatar_url FROM users WHERE username LIKE $1 OR email LIKE $2 ORDER BY username LIMIT 50",
-                like, like
-            )
-            rows = [dict(r) for r in rows]
-        else:  # sqlite
-            async with conn.execute(
-                "SELECT id, username, email, avatar_url FROM users WHERE username LIKE ? OR email LIKE ? ORDER BY username LIMIT 50",
-                (like, like)
-            ) as cursor:
-                rows_data = await cursor.fetchall()
-                rows = [
-                    {
-                        "id": r[0],
-                        "username": r[1],
-                        "email": r[2],
-                        "avatar_url": r[3]
-                    }
-                    for r in rows_data
-                ]
-        return [UserSearchResponse(**r) for r in rows]
 
 @api_router.post("/status", response_model=StatusCheck)
 async def create_status_check(input: StatusCheckCreate):
@@ -785,9 +933,8 @@ async def send_friend_request(data: FriendAction, user_id: int = Depends(get_cur
                 """,
                 user_id, data.user_id, data.user_id, user_id
             )
-            if row:
-                row = dict(row)
-        else:  # sqlite
+            row = dict(row) if row else None
+        else:
             async with conn.execute(
                 """
                 SELECT id, requester_id, addressee_id, status FROM friendships
@@ -796,31 +943,22 @@ async def send_friend_request(data: FriendAction, user_id: int = Depends(get_cur
                 (user_id, data.user_id, data.user_id, user_id)
             ) as cursor:
                 row_data = await cursor.fetchone()
-                if row_data:
-                    row = {
-                        "id": row_data[0],
-                        "requester_id": row_data[1],
-                        "addressee_id": row_data[2],
-                        "status": row_data[3]
-                    }
+                row = {"id": row_data[0], "requester_id": row_data[1], "addressee_id": row_data[2], "status": row_data[3]} if row_data else None
+
+        if row:
+            if row["status"] == 'accepted':
+                raise HTTPException(status_code=400, detail="Already friends")
+            if row["requester_id"] == user_id and row["status"] == 'pending':
+                raise HTTPException(status_code=400, detail="Request already sent")
+            if row["addressee_id"] == user_id and row["status"] == 'pending':
+                if db_type == 'postgresql':
+                    await conn.execute("UPDATE friendships SET status='accepted' WHERE id=$1", row["id"])
                 else:
-                    row = None
-        
-            if row:
-                if row["status"] == 'accepted':
-                    raise HTTPException(status_code=400, detail="Already friends")
-                if row["requester_id"] == user_id and row["status"] == 'pending':
-                    raise HTTPException(status_code=400, detail="Request already sent")
-                # If inverse pending exists, accept it
-                if row["addressee_id"] == user_id and row["status"] == 'pending':
-                    if db_type == 'postgresql':
-                        await conn.execute("UPDATE friendships SET status='accepted' WHERE id=$1", row["id"])
-                    else:
-                        await conn.execute("UPDATE friendships SET status='accepted' WHERE id=?", (row["id"],))
-                        await conn.commit()
-                    return {"status": "accepted"}
-        
-            # create new pending
+                    await conn.execute("UPDATE friendships SET status='accepted' WHERE id=?", (row["id"],))
+                    await conn.commit()
+                return {"status": "accepted"}
+
+        # create new pending
         if db_type == 'postgresql':
             await conn.execute(
                 "INSERT INTO friendships (requester_id, addressee_id, status) VALUES ($1, $2, 'pending')",
@@ -1278,6 +1416,77 @@ async def get_post(post_id: int, user_id: int = Depends(get_current_user_id)):
         "created_at": row["created_at"],
         "tags": post_tags
     }
+
+@api_router.get("/posts/{post_id}/comments", response_model=List[CommentResponse])
+async def get_post_comments(post_id: int, user_id: int = Depends(get_current_user_id)):
+    """Список комментариев к посту."""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            rows = await conn.fetch(
+                """SELECT c.id, c.post_id, c.user_id, c.content, c.created_at, u.username, u.avatar_url
+                   FROM post_comments c JOIN users u ON u.id = c.user_id
+                   WHERE c.post_id = $1 ORDER BY c.created_at ASC""",
+                post_id
+            )
+            out = [{"id": r["id"], "post_id": r["post_id"], "user_id": r["user_id"], "username": r["username"], "avatar_url": r["avatar_url"], "content": r["content"], "created_at": r["created_at"]} for r in rows]
+        else:
+            async with conn.execute(
+                """SELECT c.id, c.post_id, c.user_id, c.content, c.created_at, u.username, u.avatar_url
+                   FROM post_comments c JOIN users u ON u.id = c.user_id
+                   WHERE c.post_id = ? ORDER BY c.created_at ASC""",
+                (post_id,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+            out = [{"id": r[0], "post_id": r[1], "user_id": r[2], "content": r[3], "created_at": r[4], "username": r[5], "avatar_url": r[6]} for r in rows]
+    return [CommentResponse(**x) for x in out]
+
+@api_router.post("/posts/{post_id}/comments", response_model=CommentResponse)
+async def add_post_comment(post_id: int, data: CommentCreate, user_id: int = Depends(get_current_user_id)):
+    """Добавить комментарий к посту."""
+    if not data.content or not data.content.strip():
+        raise HTTPException(status_code=400, detail="Content required")
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            post_exists = await conn.fetchval("SELECT id FROM posts WHERE id = $1", post_id)
+            if not post_exists:
+                raise HTTPException(status_code=404, detail="Post not found")
+            cid = await conn.fetchval(
+                "INSERT INTO post_comments (post_id, user_id, content) VALUES ($1, $2, $3) RETURNING id",
+                post_id, user_id, data.content.strip()
+            )
+            await conn.execute("UPDATE posts SET comments_count = comments_count + 1 WHERE id = $1", post_id)
+            row = await conn.fetchrow(
+                "SELECT c.id, c.post_id, c.user_id, c.content, c.created_at, u.username, u.avatar_url FROM post_comments c JOIN users u ON u.id = c.user_id WHERE c.id = $1",
+                cid
+            )
+            row = dict(row)
+        else:
+            async with conn.execute("SELECT id FROM posts WHERE id = ?", (post_id,)) as cursor:
+                if not await cursor.fetchone():
+                    raise HTTPException(status_code=404, detail="Post not found")
+            await conn.execute(
+                "INSERT INTO post_comments (post_id, user_id, content) VALUES (?, ?, ?)",
+                (post_id, user_id, data.content.strip())
+            )
+            await conn.execute("UPDATE posts SET comments_count = comments_count + 1 WHERE id = ?", (post_id,))
+            await conn.commit()
+            cur = await conn.execute(
+                "SELECT id FROM post_comments WHERE post_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT 1",
+                (post_id, user_id)
+            )
+            r = await cur.fetchone()
+            cid = r[0] if r else None
+            async with conn.execute(
+                "SELECT c.id, c.post_id, c.user_id, c.content, c.created_at, u.username, u.avatar_url FROM post_comments c JOIN users u ON u.id = c.user_id WHERE c.id = ?",
+                (cid,)
+            ) as cursor:
+                r = await cursor.fetchone()
+            row = {"id": r[0], "post_id": r[1], "user_id": r[2], "content": r[3], "created_at": r[4], "username": r[5], "avatar_url": r[6]} if r else None
+    if not row:
+        raise HTTPException(status_code=500, detail="Comment not created")
+    return CommentResponse(**row)
 
 # ===================== Tags & Subscriptions API =====================
 class TagCreate(BaseModel):
@@ -2010,6 +2219,243 @@ async def get_friend_suggestions(user_id: int = Depends(get_current_user_id)):
                     for r in rows_data
                 ]
         return rows
+
+# ===================== Admin API (prefix /api, path /admin/...) =====================
+@api_router.get("/admin/stats")
+async def admin_stats(_admin_id: int = Depends(get_current_admin)):
+    """Полная статистика для админки: пользователи, посты, активность, сообщества."""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            total_users = await conn.fetchval("SELECT COUNT(*) FROM users")
+            users_today = await conn.fetchval(
+                "SELECT COUNT(*) FROM users WHERE created_at >= CURRENT_DATE")
+            users_week = await conn.fetchval(
+                "SELECT COUNT(*) FROM users WHERE created_at >= CURRENT_DATE - INTERVAL '7 days'")
+            users_month = await conn.fetchval(
+                "SELECT COUNT(*) FROM users WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'")
+            banned_count = await conn.fetchval("SELECT COUNT(*) FROM users WHERE is_banned = TRUE")
+            admin_count = await conn.fetchval("SELECT COUNT(*) FROM users WHERE is_admin = TRUE")
+            total_posts = await conn.fetchval("SELECT COUNT(*) FROM posts")
+            posts_today = await conn.fetchval(
+                "SELECT COUNT(*) FROM posts WHERE created_at >= CURRENT_DATE")
+            posts_week = await conn.fetchval(
+                "SELECT COUNT(*) FROM posts WHERE created_at >= CURRENT_DATE - INTERVAL '7 days'")
+            total_messages = await conn.fetchval("SELECT COUNT(*) FROM messages")
+            messages_today = await conn.fetchval(
+                "SELECT COUNT(*) FROM messages WHERE created_at >= CURRENT_DATE")
+            total_friendships = await conn.fetchval(
+                "SELECT COUNT(*) FROM friendships WHERE status = 'accepted'")
+            total_notifications = await conn.fetchval("SELECT COUNT(*) FROM notifications")
+            unread_notifications = await conn.fetchval(
+                "SELECT COUNT(*) FROM notifications WHERE is_read = FALSE")
+            communities_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM users WHERE community_name IS NOT NULL AND community_name != ''")
+            active_last_24h = await conn.fetchval("""
+                SELECT COUNT(DISTINCT u.id) FROM users u
+                WHERE EXISTS (SELECT 1 FROM posts p WHERE p.author_id = u.id AND p.created_at >= NOW() - INTERVAL '24 hours')
+                   OR EXISTS (SELECT 1 FROM messages m WHERE m.sender_id = u.id AND m.created_at >= NOW() - INTERVAL '24 hours')
+            """)
+        else:
+            async def _fetchval(conn, sql, params=()):
+                cur = await conn.execute(sql, params if params else ())
+                row = await cur.fetchone()
+                return row[0] if row else 0
+            total_users = await _fetchval(conn, "SELECT COUNT(*) FROM users")
+            users_today = await _fetchval(conn, "SELECT COUNT(*) FROM users WHERE date(created_at) >= date('now')")
+            users_week = await _fetchval(conn, "SELECT COUNT(*) FROM users WHERE created_at >= datetime('now', '-7 days')")
+            users_month = await _fetchval(conn, "SELECT COUNT(*) FROM users WHERE created_at >= datetime('now', '-30 days')")
+            banned_count = await _fetchval(conn, "SELECT COUNT(*) FROM users WHERE is_banned = 1")
+            admin_count = await _fetchval(conn, "SELECT COUNT(*) FROM users WHERE is_admin = 1")
+            total_posts = await _fetchval(conn, "SELECT COUNT(*) FROM posts")
+            posts_today = await _fetchval(conn, "SELECT COUNT(*) FROM posts WHERE date(created_at) >= date('now')")
+            posts_week = await _fetchval(conn, "SELECT COUNT(*) FROM posts WHERE created_at >= datetime('now', '-7 days')")
+            total_messages = await _fetchval(conn, "SELECT COUNT(*) FROM messages")
+            messages_today = await _fetchval(conn, "SELECT COUNT(*) FROM messages WHERE date(created_at) >= date('now')")
+            total_friendships = await _fetchval(conn, "SELECT COUNT(*) FROM friendships WHERE status = 'accepted'")
+            total_notifications = await _fetchval(conn, "SELECT COUNT(*) FROM notifications")
+            unread_notifications = await _fetchval(conn, "SELECT COUNT(*) FROM notifications WHERE is_read = 0")
+            communities_count = await _fetchval(conn, "SELECT COUNT(*) FROM users WHERE community_name IS NOT NULL AND community_name != ''")
+            active_last_24h = await _fetchval(conn, """
+                SELECT COUNT(DISTINCT u.id) FROM users u
+                WHERE EXISTS (SELECT 1 FROM posts p WHERE p.author_id = u.id AND p.created_at >= datetime('now', '-24 hours'))
+                   OR EXISTS (SELECT 1 FROM messages m WHERE m.sender_id = u.id AND m.created_at >= datetime('now', '-24 hours'))
+            """)
+    return {
+        "users": {
+            "total": total_users,
+            "registered_today": users_today,
+            "registered_this_week": users_week,
+            "registered_this_month": users_month,
+            "active_last_24h": active_last_24h or 0,
+            "banned": banned_count,
+            "admins": admin_count,
+        },
+        "posts": {
+            "total": total_posts,
+            "today": posts_today,
+            "this_week": posts_week,
+        },
+        "messages": {"total": total_messages, "today": messages_today},
+        "friendships": {"accepted": total_friendships},
+        "notifications": {"total": total_notifications, "unread": unread_notifications},
+        "communities": communities_count,
+    }
+
+
+@api_router.get("/admin/users")
+async def admin_list_users(
+    skip: int = 0,
+    limit: int = 50,
+    search: Optional[str] = None,
+    _admin_id: int = Depends(get_current_admin),
+):
+    """Список всех пользователей (только админ)."""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            if search:
+                rows = await conn.fetch(
+                    """SELECT id, username, email, avatar_url, is_admin, is_banned, created_at
+                       FROM users WHERE username ILIKE $1 OR email ILIKE $1 ORDER BY id LIMIT $2 OFFSET $3""",
+                    f"%{search}%", limit, skip
+                )
+            else:
+                rows = await conn.fetch(
+                    "SELECT id, username, email, avatar_url, is_admin, is_banned, created_at FROM users ORDER BY id LIMIT $1 OFFSET $2",
+                    limit, skip
+                )
+            out = [dict(r) for r in rows]
+        else:
+            if search:
+                async with conn.execute(
+                    """SELECT id, username, email, avatar_url, is_admin, is_banned, created_at
+                       FROM users WHERE username LIKE ? OR email LIKE ? ORDER BY id LIMIT ? OFFSET ?""",
+                    (f"%{search}%", f"%{search}%", limit, skip)
+                ) as cursor:
+                    rows = await cursor.fetchall()
+            else:
+                async with conn.execute(
+                    "SELECT id, username, email, avatar_url, is_admin, is_banned, created_at FROM users ORDER BY id LIMIT ? OFFSET ?",
+                    (limit, skip)
+                ) as cursor:
+                    rows = await cursor.fetchall()
+            out = [
+                {"id": r[0], "username": r[1], "email": r[2], "avatar_url": r[3], "is_admin": bool(r[4]) if len(r) > 4 else False, "is_banned": bool(r[5]) if len(r) > 5 else False, "created_at": r[6] if len(r) > 6 else None}
+                for r in rows
+            ]
+    return {"users": out, "skip": skip, "limit": limit}
+
+@api_router.get("/admin/users/{user_id}")
+async def admin_get_user(user_id: int, _admin_id: int = Depends(get_current_admin)):
+    """Данные пользователя для админки."""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            row = await conn.fetchrow(
+                "SELECT id, username, email, avatar_url, bio, is_admin, is_banned, community_name, community_description, created_at FROM users WHERE id = $1",
+                user_id
+            )
+            out = dict(row) if row else None
+        else:
+            async with conn.execute(
+                "SELECT id, username, email, avatar_url, bio, is_admin, is_banned, community_name, community_description, created_at FROM users WHERE id = ?",
+                (user_id,)
+            ) as cursor:
+                r = await cursor.fetchone()
+            out = {"id": r[0], "username": r[1], "email": r[2], "avatar_url": r[3], "bio": r[4] if len(r) > 4 else None, "is_admin": bool(r[5]) if len(r) > 5 else False, "is_banned": bool(r[6]) if len(r) > 6 else False, "community_name": r[7] if len(r) > 7 else None, "community_description": r[8] if len(r) > 8 else None, "created_at": r[9] if len(r) > 9 else None} if r else None
+    if not out:
+        raise HTTPException(status_code=404, detail="User not found")
+    return out
+
+@api_router.patch("/admin/users/{user_id}")
+async def admin_update_user(user_id: int, data: AdminUserUpdate, _admin_id: int = Depends(get_current_admin)):
+    """Обновить пользователя (бан, права админа)."""
+    db_type = get_db_type()
+    updates, values = [], []
+    if data.is_banned is not None:
+        updates.append(("is_banned", data.is_banned))
+    if data.is_admin is not None:
+        updates.append(("is_admin", data.is_admin))
+    if not updates:
+        return {"ok": True}
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            set_parts = [f"{k} = ${i+1}" for i, (k, _) in enumerate(updates)]
+            values = [v for _, v in updates] + [user_id]
+            sql = "UPDATE users SET " + ", ".join(set_parts) + " WHERE id = $" + str(len(values))
+            await conn.execute(sql, *values)
+        else:
+            set_parts = [f"{k} = ?" for k, _ in updates]
+            values = [v for _, v in updates] + [user_id]
+            sql = "UPDATE users SET " + ", ".join(set_parts) + " WHERE id = ?"
+            await conn.execute(sql, tuple(values))
+            await conn.commit()
+    return {"ok": True}
+
+@api_router.get("/admin/posts")
+async def admin_list_posts(
+    skip: int = 0,
+    limit: int = 50,
+    _admin_id: int = Depends(get_current_admin),
+):
+    """Все посты для модерации."""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            rows = await conn.fetch(
+                """SELECT p.id, p.author_id, p.content, p.images, p.likes_count, p.created_at, u.username
+                   FROM posts p JOIN users u ON p.author_id = u.id ORDER BY p.created_at DESC LIMIT $1 OFFSET $2""",
+                limit, skip
+            )
+            out = [{"id": r["id"], "author_id": r["author_id"], "author_username": r["username"], "content": r["content"], "images": json.loads(r["images"]) if isinstance(r["images"], str) else (r["images"] or []), "likes_count": r["likes_count"], "created_at": r["created_at"]} for r in rows]
+        else:
+            async with conn.execute(
+                """SELECT p.id, p.author_id, p.content, p.images, p.likes_count, p.created_at, u.username
+                   FROM posts p JOIN users u ON p.author_id = u.id ORDER BY p.created_at DESC LIMIT ? OFFSET ?""",
+                (limit, skip)
+            ) as cursor:
+                rows = await cursor.fetchall()
+            out = [{"id": r[0], "author_id": r[1], "content": r[2], "images": json.loads(r[3]) if r[3] else [], "likes_count": r[4], "created_at": r[5], "author_username": r[6]} for r in rows]
+    return {"posts": out, "skip": skip, "limit": limit}
+
+@api_router.delete("/admin/posts/{post_id}")
+async def admin_delete_post(post_id: int, _admin_id: int = Depends(get_current_admin)):
+    """Удалить пост (модерация)."""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            await conn.execute("DELETE FROM posts WHERE id = $1", post_id)
+        else:
+            await conn.execute("DELETE FROM posts WHERE id = ?", (post_id,))
+            await conn.commit()
+    return {"ok": True}
+
+@api_router.get("/admin/communities")
+async def admin_list_communities(
+    skip: int = 0,
+    limit: int = 50,
+    _admin_id: int = Depends(get_current_admin),
+):
+    """Пользователи с заполненным сообществом (community_name)."""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            rows = await conn.fetch(
+                """SELECT id, username, email, avatar_url, community_name, community_description
+                   FROM users WHERE community_name IS NOT NULL AND community_name != '' ORDER BY id LIMIT $1 OFFSET $2""",
+                limit, skip
+            )
+            out = [dict(r) for r in rows]
+        else:
+            async with conn.execute(
+                """SELECT id, username, email, avatar_url, community_name, community_description
+                   FROM users WHERE community_name IS NOT NULL AND community_name != '' ORDER BY id LIMIT ? OFFSET ?""",
+                (limit, skip)
+            ) as cursor:
+                rows = await cursor.fetchall()
+            out = [{"id": r[0], "username": r[1], "email": r[2], "avatar_url": r[3], "community_name": r[4], "community_description": r[5] if len(r) > 5 else None} for r in rows]
+    return {"communities": out, "skip": skip, "limit": limit}
 
 # Include the router in the main app
 app.include_router(api_router)

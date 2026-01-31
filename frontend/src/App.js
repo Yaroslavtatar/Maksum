@@ -9,6 +9,8 @@ import { UserProvider } from "./context/UserContext";
 import LoginPage from "./components/Auth/LoginPage";
 import HomePage from "./pages/HomePage";
 import ProfilePage from "./pages/ProfilePage";
+import ProfileByUsernamePage from "./pages/ProfileByUsernamePage";
+import ProfileRedirect from "./components/Profile/ProfileRedirect";
 import MessagesPage from "./pages/MessagesPage";
 import FriendsPage from "./pages/FriendsPage";
 import NotificationsPage from "./pages/NotificationsPage";
@@ -17,6 +19,7 @@ import SettingsPage from "./pages/SettingsPage";
 import UserProfile from "./pages/UserProfile";
 import UsersPage from "./pages/UsersPage";
 import MediaPage from "./pages/MediaPage";
+import CryAdminPage from "./pages/CryAdminPage";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8001';
 const API = `${BACKEND_URL}/api`;
@@ -87,7 +90,12 @@ function App() {
           
           <Route path="/profile" element={
             <ProtectedRoute>
-              <ProfilePage />
+              <ProfileRedirect />
+            </ProtectedRoute>
+          } />
+          <Route path="/profile/:username" element={
+            <ProtectedRoute>
+              <ProfileByUsernamePage />
             </ProtectedRoute>
           } />
           <Route path="/users/:id" element={
@@ -134,6 +142,12 @@ function App() {
           <Route path="/settings" element={
             <ProtectedRoute>
               <SettingsPage />
+            </ProtectedRoute>
+          } />
+
+          <Route path="/cryadmin" element={
+            <ProtectedRoute>
+              <CryAdminPage />
             </ProtectedRoute>
           } />
 

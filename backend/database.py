@@ -215,6 +215,8 @@ async def init_db():
                     cover_photo VARCHAR(1024) NULL,
                     theme_mode VARCHAR(20) DEFAULT 'light',
                     theme_palette VARCHAR(50) DEFAULT 'blue',
+                    is_admin BOOLEAN DEFAULT FALSE,
+                    is_banned BOOLEAN DEFAULT FALSE,
                     created_at TIMESTAMP DEFAULT NOW(),
                     updated_at TIMESTAMP DEFAULT NOW()
                 )
@@ -320,6 +322,17 @@ async def init_db():
                     UNIQUE(post_id, user_id)
                 )
             """)
+            # Таблица комментариев к постам
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS post_comments (
+                    id SERIAL PRIMARY KEY,
+                    post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    content TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_post_comments_post ON post_comments(post_id)")
             
             # Дополнительные поля пользователя
             try:
@@ -332,7 +345,10 @@ async def init_db():
                 await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_accent VARCHAR(50)")
                 await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS community_name VARCHAR(255)")
                 await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS community_description TEXT")
-            except:
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE")
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_banned BOOLEAN DEFAULT FALSE")
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP NULL")
+            except Exception:
                 pass
             
             # Таблицы для системы рекомендаций: теги и подписки
@@ -410,6 +426,8 @@ async def init_db():
                     birth_date VARCHAR(50) NULL,
                     theme_mode VARCHAR(20) DEFAULT 'light',
                     theme_palette VARCHAR(50) DEFAULT 'blue',
+                    is_admin BOOLEAN DEFAULT 0,
+                    is_banned BOOLEAN DEFAULT 0,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
@@ -494,6 +512,19 @@ async def init_db():
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                 )
             """)
+            # Таблица комментариев к постам SQLite
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS post_comments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    post_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_post_comments_post ON post_comments(post_id)")
             
             # Миграция: добавляем недостающие колонки в users (для существующих БД)
             try:
@@ -517,6 +548,12 @@ async def init_db():
                     await conn.execute("ALTER TABLE users ADD COLUMN community_name VARCHAR(255) NULL")
                 if 'community_description' not in columns:
                     await conn.execute("ALTER TABLE users ADD COLUMN community_description TEXT NULL")
+                if 'is_admin' not in columns:
+                    await conn.execute("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0")
+                if 'is_banned' not in columns:
+                    await conn.execute("ALTER TABLE users ADD COLUMN is_banned BOOLEAN DEFAULT 0")
+                if 'last_seen' not in columns:
+                    await conn.execute("ALTER TABLE users ADD COLUMN last_seen DATETIME NULL")
             except Exception as e:
                 logger.warning(f"Миграция колонок users: {e}")
             

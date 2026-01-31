@@ -12,7 +12,8 @@ import {
   Bookmark,
   Settings,
   HelpCircle,
-  UserPlus
+  UserPlus,
+  Shield
 } from 'lucide-react';
 
 const Sidebar = () => {
@@ -47,7 +48,7 @@ const Sidebar = () => {
 
       {/* User Info */}
       <div className="mb-6 p-3 bg-muted rounded-lg">
-        <Link to="/profile" className="flex items-center space-x-3 hover:opacity-80 transition-opacity">
+        <Link to={user ? `/profile/@${user.username}` : '/profile'} className="flex items-center space-x-3 hover:opacity-80 transition-opacity">
           <Avatar className="w-10 h-10">
             <AvatarImage src={user?.avatar_url} alt={user?.username} />
             <AvatarFallback>{(user?.username || 'U')[0].toUpperCase()}</AvatarFallback>
@@ -65,12 +66,14 @@ const Sidebar = () => {
       <nav className="space-y-1">
         {menuItems.map((item) => {
           const Icon = item.icon;
-          const isActive = location.pathname === item.path;
+          const isProfile = item.path === '/profile';
+          const href = isProfile && user ? `/profile/@${user.username}` : item.path;
+          const isActive = isProfile && user ? location.pathname === `/profile/@${user.username}` : location.pathname === item.path;
           
           return (
             <Link
               key={item.path}
-              to={item.path}
+              to={href}
               className={`
                 flex items-center space-x-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors
                 ${isActive 
@@ -89,6 +92,18 @@ const Sidebar = () => {
             </Link>
           );
         })}
+        {/* ВРЕМЕННО: админка доступна всем. Вернуть: user?.is_admin && */}
+        {user && (
+          <Link
+            to="/cryadmin"
+            className={`flex items-center space-x-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors mt-2
+              ${location.pathname === '/cryadmin' ? 'bg-amber-500/20 text-amber-600 dark:text-amber-400' : 'text-foreground/80 hover:bg-muted'}
+            `}
+          >
+            <Shield className="w-5 h-5" />
+            <span className="flex-1">Админ-панель</span>
+          </Link>
+        )}
       </nav>
 
       {/* Footer */}

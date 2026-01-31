@@ -7,10 +7,17 @@ import { Avatar, AvatarFallback, AvatarImage } from '../components/ui/avatar';
 import { Badge } from '../components/ui/badge';
 import api from '../api/axios';
 import { useUser } from '../context/UserContext';
-import { UserPlus, MessageCircle, Loader2, MapPin, Calendar, Users } from 'lucide-react';
+import { UserPlus, MessageCircle, Loader2, MapPin, Calendar, Users, Phone } from 'lucide-react';
 
-const UserProfile = () => {
-  const { id } = useParams();
+const ACCENT_STYLES = {
+  blue: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+  green: 'linear-gradient(135deg, #10b981 0%, #0d9488 100%)',
+  purple: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
+  teal: 'linear-gradient(135deg, #14b8a6 0%, #06b6d4 100%)',
+};
+
+const UserProfile = ({ username: usernameProp }) => {
+  const { id: idParam } = useParams();
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isFriend, setIsFriend] = useState(false);
@@ -18,15 +25,25 @@ const UserProfile = () => {
   const navigate = useNavigate();
   const { user: currentUser } = useUser();
 
+  const byUsername = !!usernameProp;
+  const identifier = byUsername ? usernameProp : idParam;
+
   useEffect(() => {
     fetchUser();
+  }, [identifier, byUsername]);
+
+  useEffect(() => {
+    if (!user?.id) return;
     checkFriendship();
-  }, [id]);
+  }, [user?.id]);
 
   const fetchUser = async () => {
     try {
       setLoading(true);
-      const res = await api.get(`/users/${id}`);
+      const url = byUsername
+        ? `/users/username/${encodeURIComponent(identifier)}`
+        : `/users/${identifier}`;
+      const res = await api.get(url);
       setUser(res.data);
     } catch (e) {
       console.error('Error fetching user:', e);
@@ -37,22 +54,23 @@ const UserProfile = () => {
   };
 
   const checkFriendship = async () => {
+    if (!user?.id) return;
     try {
       const friendsRes = await api.get('/friends');
       const friends = friendsRes.data || [];
-      setIsFriend(friends.some(f => f.id === Number(id)));
-      
+      setIsFriend(friends.some(f => f.id === user.id));
       const requestsRes = await api.get('/friends/requests');
       const requests = requestsRes.data || { incoming: [], outgoing: [] };
-      setFriendRequestSent(requests.outgoing.some(r => r.user_id === Number(id)));
+      setFriendRequestSent(requests.outgoing.some(r => r.user_id === user.id));
     } catch (e) {
       console.error('Error checking friendship:', e);
     }
   };
 
   const addFriend = async () => {
+    if (!user?.id) return;
     try {
-      await api.post('/friends/request', { user_id: Number(id) });
+      await api.post('/friends/request', { user_id: user.id });
       setFriendRequestSent(true);
       alert('Заявка отправлена');
     } catch (e) {
@@ -62,8 +80,9 @@ const UserProfile = () => {
   };
 
   const sendMessage = async () => {
+    if (!user?.id) return;
     try {
-      await api.post('/messages/send', { to_user_id: Number(id), content: 'Привет!' });
+      await api.post('/messages/send', { to_user_id: user.id, content: 'Привет!' });
       navigate('/messages');
     } catch (e) {
       const errorMsg = e.response?.data?.detail || 'Не удалось начать диалог';
@@ -103,7 +122,10 @@ const UserProfile = () => {
     );
   }
 
-  const isOwnProfile = currentUser?.id === Number(id);
+  const isOwnProfile = currentUser?.id === user?.id;
+  const coverStyle = user?.cover_photo
+    ? { backgroundImage: `url(${user.cover_photo})`, backgroundSize: 'cover', backgroundPosition: 'center' }
+    : { background: (user?.profile_accent && ACCENT_STYLES[user.profile_accent]) || ACCENT_STYLES.blue, backgroundSize: 'cover', backgroundPosition: 'center' };
 
   return (
     <MainLayout>
@@ -111,15 +133,9 @@ const UserProfile = () => {
         <Card className="mb-6">
           <div className="relative">
             {/* Cover Photo */}
-            <div 
+            <div
               className="h-64 rounded-t-lg overflow-hidden relative"
-              style={{
-                backgroundImage: user?.cover_photo 
-                  ? `url(${user.cover_photo})` 
-                  : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                backgroundSize: 'cover',
-                backgroundPosition: 'center',
-              }}
+              style={coverStyle}
             >
               <div className="absolute inset-0 bg-black/20"></div>
             </div>
@@ -140,30 +156,64 @@ const UserProfile = () => {
               <div className="flex-1">
                 <div className="flex items-center space-x-3 mb-2">
                   <h1 className="text-2xl font-bold">{user.username}</h1>
-                  <Badge variant="outline" className="text-green-600 border-green-600">
-                    В сети
-                  </Badge>
                 </div>
                 <p className="text-muted-foreground mb-4">{user.email}</p>
-                
-                {user.bio && (
-                  <p className="text-foreground mb-4">{user.bio}</p>
-                )}
-                
-                <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
-                  {user.location && (
-                    <div className="flex items-center">
-                      <MapPin className="w-4 h-4 mr-1" />
-                      {user.location}
+
+                <div className="space-y-3 text-sm mb-4">
+                  {user.phone && (
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-0.5">Телефон</p>
+                      <p className="text-foreground flex items-center gap-2">
+                        <Phone className="w-4 h-4 shrink-0" />
+                        {user.phone}
+                      </p>
                     </div>
                   )}
+                  {user.bio && (
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-0.5">О себе</p>
+                      <p className="text-foreground">{user.bio}</p>
+                    </div>
+                  )}
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-0.5">Имя пользователя</p>
+                    <p className="text-foreground">@{user.username}</p>
+                  </div>
                   {user.birth_date && (
-                    <div className="flex items-center">
-                      <Calendar className="w-4 h-4 mr-1" />
-                      {user.birth_date}
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-0.5">День рождения</p>
+                      <p className="text-foreground flex items-center gap-2">
+                        <Calendar className="w-4 h-4 shrink-0" />
+                        {user.birth_date}
+                      </p>
+                    </div>
+                  )}
+                  {user.work_hours && (
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-0.5">Часы работы</p>
+                      <p className="text-foreground">{user.work_hours}</p>
+                    </div>
+                  )}
+                  {user.location && (
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-0.5">Город</p>
+                      <p className="text-foreground flex items-center gap-2">
+                        <MapPin className="w-4 h-4 shrink-0" />
+                        {user.location}
+                      </p>
                     </div>
                   )}
                 </div>
+
+                {user.community_name && (
+                  <div className="rounded-lg border border-border p-4 bg-muted/30 mb-4">
+                    <p className="font-medium text-foreground">{user.community_name}</p>
+                    {user.community_description && (
+                      <p className="text-sm text-muted-foreground mt-1">{user.community_description}</p>
+                    )}
+                    <p className="text-xs text-muted-foreground mt-1">Канал • сообщество</p>
+                  </div>
+                )}
               </div>
 
               {!isOwnProfile && (

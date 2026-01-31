@@ -198,7 +198,7 @@ const FriendsPage = () => {
                             variant="outline" 
                             size="sm" 
                             className="flex-1"
-                            onClick={() => navigate(`/users/${friend.id}`)}
+                            onClick={() => navigate(friend.username ? `/profile/@${friend.username}` : `/users/${friend.id}`)}
                           >
                             Профиль
                           </Button>
@@ -271,7 +271,7 @@ const FriendsPage = () => {
                                 <Button
                                   variant="outline"
                                   size="sm"
-                                  onClick={() => navigate(`/users/${req.user_id}`)}
+                                  onClick={() => navigate(req.username ? `/profile/@${req.username}` : `/users/${req.user_id}`)}
                                 >
                                   Профиль
                                 </Button>
@@ -311,7 +311,7 @@ const FriendsPage = () => {
                                 <Button
                                   variant="outline"
                                   size="sm"
-                                  onClick={() => navigate(`/users/${req.user_id}`)}
+                                  onClick={() => navigate(req.username ? `/profile/@${req.username}` : `/users/${req.user_id}`)}
                                 >
                                   Профиль
                                 </Button>
@@ -377,7 +377,7 @@ const FriendsPage = () => {
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => navigate(`/users/${user.id}`)}
+                            onClick={() => navigate(user.username ? `/profile/@${user.username}` : `/users/${user.id}`)}
                           >
                             Профиль
                           </Button>
