@@ -614,6 +614,104 @@ curl http://localhost:8001/api/users/me \
 
 ---
 
+### 🏷 Tags & Subscriptions API (Теги и подписки)
+
+Используются для системы рекомендаций: теги привязываются к постам, пользователи подписываются на теги. Рекомендации строятся по подпискам и по тегам лайкнутых постов.
+
+#### GET `/api/tags`
+Список всех тегов с флагом подписки текущего пользователя.
+
+**Аутентификация:** ✅ Требуется
+
+**Успешный ответ (200):**
+```json
+[
+  { "id": 1, "name": "Музыка", "subscribed": true },
+  { "id": 2, "name": "Спорт", "subscribed": false }
+]
+```
+
+---
+
+#### POST `/api/tags`
+Создать новый тег по имени. Если тег с таким именем уже есть — возвращается существующий.
+
+**Аутентификация:** ✅ Требуется
+
+**Тело запроса:**
+```json
+{ "name": "Путешествия" }
+```
+
+**Успешный ответ (200):**
+```json
+{ "id": 3, "name": "Путешествия" }
+```
+
+---
+
+#### POST `/api/tags/{tag_id}/subscribe`
+Подписаться на тег.
+
+**Аутентификация:** ✅ Требуется
+
+**Успешный ответ (200):**
+```json
+{ "subscribed": true }
+```
+
+---
+
+#### DELETE `/api/tags/{tag_id}/subscribe`
+Отписаться от тега.
+
+**Аутентификация:** ✅ Требуется
+
+**Успешный ответ (200):**
+```json
+{ "subscribed": false }
+```
+
+---
+
+#### GET `/api/users/me/subscriptions`
+Мои подписки на теги.
+
+**Аутентификация:** ✅ Требуется
+
+**Успешный ответ (200):**
+```json
+[
+  { "id": 1, "name": "Музыка" },
+  { "id": 3, "name": "Путешествия" }
+]
+```
+
+---
+
+### 📈 Recommendations API (Рекомендации)
+
+#### GET `/api/recommendations/posts?limit=50`
+Рекомендуемые посты по интересам.
+
+**Аутентификация:** ✅ Требуется
+
+**Query-параметры:**
+- `limit` (integer, по умолчанию 50) — максимум постов в ответе
+
+**Логика алгоритма:**
+- Учитываются теги, на которые подписан пользователь, и теги постов, которые пользователь лайкнул.
+- В выдачу попадают посты не от самого пользователя, не лайкнутые им, от друзей или с совпадающими тегами.
+- Ранжирование: по количеству совпадающих тегов (больше — выше), затем по дате публикации.
+
+**Успешный ответ (200):** массив постов в том же формате, что и лента (поля `id`, `author_id`, `author_username`, `author_avatar`, `content`, `images`, `likes`, `comments`, `liked`, `created_at`, `tags`).
+
+---
+
+**Посты с тегами:** при создании поста можно передать `tag_ids`; в ответах ленты, своих постов и рекомендаций у каждого поста есть поле `tags`: `[{ "id": 1, "name": "Музыка" }, ...]`.
+
+---
+
 ## 📦 Модели данных
 
 ### Pydantic модели запросов
@@ -762,6 +860,45 @@ CREATE TABLE status_checks (
     id VARCHAR(36) PRIMARY KEY,
     client_name VARCHAR(255) NOT NULL,
     timestamp TIMESTAMP DEFAULT NOW()
+);
+```
+
+#### posts, post_likes
+```sql
+CREATE TABLE posts (
+    id SERIAL PRIMARY KEY,
+    author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    content TEXT NOT NULL,
+    images TEXT DEFAULT '[]',
+    likes_count INTEGER DEFAULT 0,
+    comments_count INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE TABLE post_likes (
+    id SERIAL PRIMARY KEY,
+    post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(post_id, user_id)
+);
+```
+
+#### tags, post_tags, user_tag_subscriptions (рекомендации)
+```sql
+CREATE TABLE tags (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) UNIQUE NOT NULL
+);
+CREATE TABLE post_tags (
+    post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (post_id, tag_id)
+);
+CREATE TABLE user_tag_subscriptions (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    created_at TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (user_id, tag_id)
 );
 ```
 

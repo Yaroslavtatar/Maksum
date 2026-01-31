@@ -96,6 +96,7 @@ class MessageSend(BaseModel):
 class PostCreate(BaseModel):
     content: str
     images: List[str] = []
+    tag_ids: List[int] = []
 
 class PostResponse(BaseModel):
     id: int
@@ -108,6 +109,12 @@ class PostResponse(BaseModel):
     comments: int = 0
     liked: bool = False
     created_at: datetime
+    tags: List[dict] = []
+
+class TagResponse(BaseModel):
+    id: int
+    name: str
+    subscribed: bool = False
 
 class UserProfileUpdate(BaseModel):
     username: Optional[str] = None
@@ -193,6 +200,31 @@ async def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depend
             if not row:
                 raise HTTPException(status_code=401, detail="User not found")
     return user_id
+
+
+async def get_tags_for_posts(conn, db_type: str, post_ids: List[int]):
+    """Возвращает словарь post_id -> [{"id": tag_id, "name": tag_name}]"""
+    if not post_ids:
+        return {}
+    ids_placeholders = ",".join(["$" + str(i+1) for i in range(len(post_ids))]) if db_type == 'postgresql' else ",".join(["?"] * len(post_ids))
+    params = tuple(post_ids)
+    out = {pid: [] for pid in post_ids}
+    if db_type == 'postgresql':
+        rows = await conn.fetch(
+            f"SELECT pt.post_id, t.id, t.name FROM post_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.post_id IN ({ids_placeholders})",
+            *params
+        )
+        for r in rows:
+            out[r["post_id"]].append({"id": r["id"], "name": r["name"]})
+    else:
+        async with conn.execute(
+            f"SELECT pt.post_id, t.id, t.name FROM post_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.post_id IN ({ids_placeholders})",
+            params
+        ) as cursor:
+            async for r in cursor:
+                out[r[0]].append({"id": r[1], "name": r[2]})
+    return out
+
 
 # API Routes
 @api_router.get("/")
@@ -845,7 +877,7 @@ async def list_friends(user_id: int = Depends(get_current_user_id)):
 # ===================== Posts API =====================
 @api_router.post("/posts")
 async def create_post(data: PostCreate, user_id: int = Depends(get_current_user_id)):
-    """Создать новый пост"""
+    """Создать новый пост (опционально с тегами)"""
     db_type = get_db_type()
     images_json = json.dumps(data.images)
     
@@ -855,7 +887,11 @@ async def create_post(data: PostCreate, user_id: int = Depends(get_current_user_
                 "INSERT INTO posts (author_id, content, images) VALUES ($1, $2, $3) RETURNING id",
                 user_id, data.content, images_json
             )
-            # Получаем созданный пост с данными автора
+            for tag_id in (data.tag_ids or []):
+                await conn.execute(
+                    "INSERT INTO post_tags (post_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                    post_id, tag_id
+                )
             row = await conn.fetchrow(
                 """
                 SELECT p.id, p.author_id, p.content, p.images, p.likes_count, p.comments_count, p.created_at,
@@ -874,6 +910,12 @@ async def create_post(data: PostCreate, user_id: int = Depends(get_current_user_
             )
             await conn.commit()
             post_id = cursor.lastrowid
+            for tag_id in (data.tag_ids or []):
+                await conn.execute(
+                    "INSERT OR IGNORE INTO post_tags (post_id, tag_id) VALUES (?, ?)",
+                    (post_id, tag_id)
+                )
+            await conn.commit()
             async with conn.execute(
                 """
                 SELECT p.id, p.author_id, p.content, p.images, p.likes_count, p.comments_count, p.created_at,
@@ -890,6 +932,8 @@ async def create_post(data: PostCreate, user_id: int = Depends(get_current_user_
                     "likes_count": r[4], "comments_count": r[5], "created_at": r[6],
                     "username": r[7], "avatar_url": r[8]
                 }
+        tags_map = await get_tags_for_posts(conn, db_type, [post_id])
+        post_tags = tags_map.get(post_id, [])
     
     return {
         "id": row["id"],
@@ -901,7 +945,8 @@ async def create_post(data: PostCreate, user_id: int = Depends(get_current_user_
         "likes": row["likes_count"],
         "comments": row["comments_count"],
         "liked": False,
-        "created_at": row["created_at"]
+        "created_at": row["created_at"],
+        "tags": post_tags
     }
 
 @api_router.get("/posts/my")
@@ -948,6 +993,8 @@ async def get_my_posts(user_id: int = Depends(get_current_user_id)):
                     }
                     for r in rows_data
                 ]
+        post_ids = [r["id"] for r in rows]
+        tags_map = await get_tags_for_posts(conn, db_type, post_ids)
     
     return [
         {
@@ -960,7 +1007,8 @@ async def get_my_posts(user_id: int = Depends(get_current_user_id)):
             "likes": r["likes_count"],
             "comments": r["comments_count"],
             "liked": r["liked"],
-            "created_at": r["created_at"]
+            "created_at": r["created_at"],
+            "tags": tags_map.get(r["id"], [])
         }
         for r in rows
     ]
@@ -1019,6 +1067,8 @@ async def get_feed(user_id: int = Depends(get_current_user_id)):
                     }
                     for r in rows_data
                 ]
+        post_ids = [r["id"] for r in rows]
+        tags_map = await get_tags_for_posts(conn, db_type, post_ids)
     
     return [
         {
@@ -1031,7 +1081,8 @@ async def get_feed(user_id: int = Depends(get_current_user_id)):
             "likes": r["likes_count"],
             "comments": r["comments_count"],
             "liked": r["liked"],
-            "created_at": r["created_at"]
+            "created_at": r["created_at"],
+            "tags": tags_map.get(r["id"], [])
         }
         for r in rows
     ]
@@ -1155,6 +1206,10 @@ async def get_post(post_id: int, user_id: int = Depends(get_current_user_id)):
                     "username": r[7], "avatar_url": r[8], "liked": bool(r[9])
                 }
     
+    async with get_db() as conn2:
+        tags_map = await get_tags_for_posts(conn2, get_db_type(), [post_id])
+    post_tags = tags_map.get(post_id, [])
+
     return {
         "id": row["id"],
         "author_id": row["author_id"],
@@ -1165,10 +1220,268 @@ async def get_post(post_id: int, user_id: int = Depends(get_current_user_id)):
         "likes": row["likes_count"],
         "comments": row["comments_count"],
         "liked": row["liked"],
-        "created_at": row["created_at"]
+        "created_at": row["created_at"],
+        "tags": post_tags
     }
 
-# ===================== Messaging API =====================
+# ===================== Tags & Subscriptions API =====================
+class TagCreate(BaseModel):
+    name: str
+
+@api_router.get("/tags")
+async def list_tags(user_id: int = Depends(get_current_user_id)):
+    """Список всех тегов с флагом подписки текущего пользователя"""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            rows = await conn.fetch(
+                """
+                SELECT t.id, t.name,
+                       EXISTS(SELECT 1 FROM user_tag_subscriptions s WHERE s.user_id = $1 AND s.tag_id = t.id) as subscribed
+                FROM tags t
+                ORDER BY t.name
+                """,
+                user_id
+            )
+            rows = [dict(r) for r in rows]
+        else:
+            async with conn.execute(
+                """
+                SELECT t.id, t.name,
+                       EXISTS(SELECT 1 FROM user_tag_subscriptions s WHERE s.user_id = ? AND s.tag_id = t.id) as subscribed
+                FROM tags t
+                ORDER BY t.name
+                """,
+                (user_id,)
+            ) as cursor:
+                rows_data = await cursor.fetchall()
+                rows = [
+                    {"id": r[0], "name": r[1], "subscribed": bool(r[2])}
+                    for r in rows_data
+                ]
+    return [{"id": r["id"], "name": r["name"], "subscribed": r["subscribed"]} for r in rows]
+
+
+@api_router.post("/tags")
+async def create_tag(data: TagCreate, user_id: int = Depends(get_current_user_id)):
+    """Создать новый тег (по имени). Если тег уже есть — вернуть его id."""
+    db_type = get_db_type()
+    name = (data.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Tag name required")
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            row = await conn.fetchrow("SELECT id, name FROM tags WHERE name = $1", name)
+            if row:
+                return {"id": row["id"], "name": row["name"]}
+            row = await conn.fetchrow("INSERT INTO tags (name) VALUES ($1) RETURNING id, name", name)
+            return {"id": row["id"], "name": row["name"]}
+        else:
+            async with conn.execute("SELECT id, name FROM tags WHERE name = ?", (name,)) as cursor:
+                r = await cursor.fetchone()
+            if r:
+                return {"id": r[0], "name": r[1]}
+            await conn.execute("INSERT INTO tags (name) VALUES (?)", (name,))
+            await conn.commit()
+            async with conn.execute("SELECT id, name FROM tags WHERE name = ?", (name,)) as cursor:
+                r = await cursor.fetchone()
+            return {"id": r[0], "name": r[1]}
+
+
+@api_router.post("/tags/{tag_id}/subscribe")
+async def subscribe_tag(tag_id: int, user_id: int = Depends(get_current_user_id)):
+    """Подписаться на тег"""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            await conn.execute(
+                "INSERT INTO user_tag_subscriptions (user_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                user_id, tag_id
+            )
+        else:
+            await conn.execute(
+                "INSERT OR IGNORE INTO user_tag_subscriptions (user_id, tag_id) VALUES (?, ?)",
+                (user_id, tag_id)
+            )
+            await conn.commit()
+    return {"subscribed": True}
+
+
+@api_router.delete("/tags/{tag_id}/subscribe")
+async def unsubscribe_tag(tag_id: int, user_id: int = Depends(get_current_user_id)):
+    """Отписаться от тега"""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            await conn.execute("DELETE FROM user_tag_subscriptions WHERE user_id = $1 AND tag_id = $2", user_id, tag_id)
+        else:
+            await conn.execute("DELETE FROM user_tag_subscriptions WHERE user_id = ? AND tag_id = ?", (user_id, tag_id))
+            await conn.commit()
+    return {"subscribed": False}
+
+
+@api_router.get("/users/me/subscriptions")
+async def my_subscriptions(user_id: int = Depends(get_current_user_id)):
+    """Мои подписки на теги"""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            rows = await conn.fetch(
+                "SELECT t.id, t.name FROM tags t JOIN user_tag_subscriptions s ON s.tag_id = t.id WHERE s.user_id = $1 ORDER BY t.name",
+                user_id
+            )
+            rows = [dict(r) for r in rows]
+        else:
+            async with conn.execute(
+                "SELECT t.id, t.name FROM tags t JOIN user_tag_subscriptions s ON s.tag_id = t.id WHERE s.user_id = ? ORDER BY t.name",
+                (user_id,)
+            ) as cursor:
+                rows = [{"id": r[0], "name": r[1]} for r in await cursor.fetchall()]
+    return rows
+
+
+# ===================== Recommendations API =====================
+@api_router.get("/recommendations/posts")
+async def get_recommended_posts(user_id: int = Depends(get_current_user_id), limit: int = 50):
+    """
+    Рекомендации постов по интересам:
+    - теги, на которые подписан пользователь;
+    - теги постов, которые пользователь лайкнул.
+    Посты ранжируются по количеству совпадающих тегов и по дате.
+    """
+    db_type = get_db_type()
+    async with get_db() as conn:
+        # 1) Интересные теги: подписки + теги с лайкнутых постов
+        if db_type == 'postgresql':
+            sub_rows = await conn.fetch("SELECT tag_id FROM user_tag_subscriptions WHERE user_id = $1", user_id)
+            liked_tag_rows = await conn.fetch(
+                "SELECT DISTINCT pt.tag_id FROM post_likes pl JOIN post_tags pt ON pt.post_id = pl.post_id WHERE pl.user_id = $1",
+                user_id
+            )
+        else:
+            async with conn.execute("SELECT tag_id FROM user_tag_subscriptions WHERE user_id = ?", (user_id,)) as cursor:
+                sub_rows = await cursor.fetchall()
+            async with conn.execute(
+                "SELECT DISTINCT pt.tag_id FROM post_likes pl JOIN post_tags pt ON pt.post_id = pl.post_id WHERE pl.user_id = ?",
+                (user_id,)
+            ) as cursor:
+                liked_tag_rows = await cursor.fetchall()
+        interest_tag_ids = set()
+        for r in (sub_rows or []):
+            interest_tag_ids.add(r["tag_id"] if db_type == 'postgresql' else r[0])
+        for r in (liked_tag_rows or []):
+            interest_tag_ids.add(r["tag_id"] if db_type == 'postgresql' else r[0])
+        interest_tag_ids = list(interest_tag_ids)
+
+        # 2) Кандидаты: посты не свои, не лайкнутые, (от друзей ИЛИ с совпадающими тегами)
+        rows = []
+        if db_type == 'postgresql':
+            if interest_tag_ids:
+                n = len(interest_tag_ids)
+                tag_ph1 = ",".join(["$" + str(i+3) for i in range(n)])
+                tag_ph2 = ",".join(["$" + str(i+3+n) for i in range(n)])
+                limit_idx = 3 + 2 * n
+                params = [user_id, user_id] + interest_tag_ids + interest_tag_ids + [limit]
+                q = f"""
+                    SELECT p.id, p.author_id, p.content, p.images, p.likes_count, p.comments_count, p.created_at,
+                           u.username, u.avatar_url,
+                           EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = $1) as liked,
+                           (SELECT COUNT(*) FROM post_tags pt WHERE pt.post_id = p.id AND pt.tag_id IN ({tag_ph1})) as match_count
+                    FROM posts p
+                    JOIN users u ON u.id = p.author_id
+                    WHERE p.author_id != $2
+                      AND NOT EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = $2)
+                      AND (
+                        p.author_id IN (SELECT CASE WHEN requester_id = $2 THEN addressee_id ELSE requester_id END FROM friendships WHERE (requester_id = $2 OR addressee_id = $2) AND status = 'accepted')
+                        OR EXISTS(SELECT 1 FROM post_tags pt WHERE pt.post_id = p.id AND pt.tag_id IN ({tag_ph2}))
+                      )
+                    ORDER BY match_count DESC, p.created_at DESC
+                    LIMIT ${limit_idx}
+                """
+                rows_pg = await conn.fetch(q, *params)
+                rows = [dict(r) for r in rows_pg]
+            else:
+                rows_pg = await conn.fetch(
+                    """
+                    SELECT p.id, p.author_id, p.content, p.images, p.likes_count, p.comments_count, p.created_at,
+                           u.username, u.avatar_url,
+                           EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = $1) as liked
+                    FROM posts p
+                    JOIN users u ON u.id = p.author_id
+                    WHERE p.author_id != $1
+                      AND p.author_id IN (SELECT CASE WHEN requester_id = $1 THEN addressee_id ELSE requester_id END FROM friendships WHERE (requester_id = $1 OR addressee_id = $1) AND status = 'accepted')
+                    ORDER BY p.created_at DESC
+                    LIMIT $2
+                    """,
+                    user_id, limit
+                )
+                rows = [dict(r) for r in rows_pg]
+        else:
+            if interest_tag_ids:
+                placeholders = ",".join(["?" for _ in interest_tag_ids])
+                params = (user_id, user_id) + tuple(interest_tag_ids) + (user_id, user_id, user_id) + tuple(interest_tag_ids) + (limit,)
+                async with conn.execute(
+                    f"""
+                    SELECT p.id, p.author_id, p.content, p.images, p.likes_count, p.comments_count, p.created_at,
+                           u.username, u.avatar_url,
+                           EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = ?) as liked,
+                           (SELECT COUNT(*) FROM post_tags pt WHERE pt.post_id = p.id AND pt.tag_id IN ({placeholders})) as match_count
+                    FROM posts p
+                    JOIN users u ON u.id = p.author_id
+                    WHERE p.author_id != ? AND NOT EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = ?)
+                      AND (p.author_id IN (SELECT CASE WHEN requester_id = ? THEN addressee_id ELSE requester_id END FROM friendships WHERE (requester_id = ? OR addressee_id = ?) AND status = 'accepted')
+                           OR EXISTS(SELECT 1 FROM post_tags pt WHERE pt.post_id = p.id AND pt.tag_id IN ({placeholders})))
+                    ORDER BY match_count DESC, p.created_at DESC
+                    LIMIT ?
+                    """,
+                    params
+                ) as cursor:
+                    rows_data = await cursor.fetchall()
+                rows = [
+                    {"id": r[0], "author_id": r[1], "content": r[2], "images": r[3], "likes_count": r[4], "comments_count": r[5], "created_at": r[6], "username": r[7], "avatar_url": r[8], "liked": bool(r[9]), "match_count": r[10] or 0}
+                    for r in rows_data
+                ]
+            else:
+                async with conn.execute(
+                    """
+                    SELECT p.id, p.author_id, p.content, p.images, p.likes_count, p.comments_count, p.created_at,
+                           u.username, u.avatar_url,
+                           EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = ?) as liked
+                    FROM posts p
+                    JOIN users u ON u.id = p.author_id
+                    WHERE p.author_id != ? AND p.author_id IN (SELECT CASE WHEN requester_id = ? THEN addressee_id ELSE requester_id END FROM friendships WHERE (requester_id = ? OR addressee_id = ?) AND status = 'accepted')
+                    ORDER BY p.created_at DESC
+                    LIMIT ?
+                    """,
+                    (user_id, user_id, user_id, user_id, user_id, limit)
+                ) as cursor:
+                    rows_data = await cursor.fetchall()
+                rows = [
+                    {"id": r[0], "author_id": r[1], "content": r[2], "images": r[3], "likes_count": r[4], "comments_count": r[5], "created_at": r[6], "username": r[7], "avatar_url": r[8], "liked": bool(r[9])}
+                    for r in rows_data
+                ]
+
+        post_ids = [r["id"] for r in rows]
+        tags_map = await get_tags_for_posts(conn, db_type, post_ids)
+
+    return [
+        {
+            "id": r["id"],
+            "author_id": r["author_id"],
+            "author_username": r["username"],
+            "author_avatar": r["avatar_url"],
+            "content": r["content"],
+            "images": json.loads(r["images"]) if r["images"] else [],
+            "likes": r["likes_count"],
+            "comments": r["comments_count"],
+            "liked": r["liked"],
+            "created_at": r["created_at"],
+            "tags": tags_map.get(r["id"], [])
+        }
+        for r in rows
+    ]
+
+
 @api_router.get("/conversations")
 async def list_conversations(user_id: int = Depends(get_current_user_id)):
     """Получить список диалогов с информацией о собеседниках и последнем сообщении"""

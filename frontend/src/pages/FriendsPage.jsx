@@ -84,7 +84,7 @@ const FriendsPage = () => {
       await fetchRequests();
       await fetchFriends();
     } catch (e) {
-      console.error('Ошибка принятия в друзья:', e);
+      console.error('Error accepting request:', e);
     }
   };
 
@@ -94,7 +94,7 @@ const FriendsPage = () => {
       await fetchSuggestions();
       await fetchRequests();
     } catch (e) {
-      console.error('Ошибка отправки дружбы:', e);
+      console.error('Error sending request:', e);
     }
   };
 

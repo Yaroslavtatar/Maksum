@@ -330,11 +330,38 @@ async def init_db():
             except:
                 pass
             
+            # Таблицы для системы рекомендаций: теги и подписки
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS tags (
+                    id SERIAL PRIMARY KEY,
+                    name VARCHAR(100) UNIQUE NOT NULL
+                )
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS post_tags (
+                    post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+                    tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+                    PRIMARY KEY (post_id, tag_id)
+                )
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS user_tag_subscriptions (
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    PRIMARY KEY (user_id, tag_id)
+                )
+            """)
+
             # Индексы для постов
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author_id)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_post_likes_post ON post_likes(post_id)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_post_likes_user ON post_likes(user_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_post_tags_post ON post_tags(post_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_post_tags_tag ON post_tags(tag_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_tag_subscriptions_user ON user_tag_subscriptions(user_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_tag_subscriptions_tag ON user_tag_subscriptions(tag_id)")
             
             # Триггеры для updated_at
             await conn.execute("""
@@ -501,10 +528,41 @@ async def init_db():
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_friendships_status ON friendships(status)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON messages(conversation_id, created_at)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_status_checks_timestamp ON status_checks(timestamp)")
+            # Таблицы для системы рекомендаций: теги и подписки (SQLite)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS tags (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name VARCHAR(100) UNIQUE NOT NULL
+                )
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS post_tags (
+                    post_id INTEGER NOT NULL,
+                    tag_id INTEGER NOT NULL,
+                    PRIMARY KEY (post_id, tag_id),
+                    FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE,
+                    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+                )
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS user_tag_subscriptions (
+                    user_id INTEGER NOT NULL,
+                    tag_id INTEGER NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, tag_id),
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+                )
+            """)
+
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author_id)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_post_likes_post ON post_likes(post_id)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_post_likes_user ON post_likes(user_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_post_tags_post ON post_tags(post_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_post_tags_tag ON post_tags(tag_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_tag_subscriptions_user ON user_tag_subscriptions(user_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_tag_subscriptions_tag ON user_tag_subscriptions(tag_id)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, is_read)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at)")
             

@@ -52,7 +52,7 @@ const LoginPage = () => {
         localStorage.setItem('token', response.data.access_token);
         // Отправляем событие для обновления данных пользователя
         window.dispatchEvent(new Event('maksum:token-set'));
-        setSuccess('Успешный вход! Ожидайте...');
+        setSuccess('Успешный вход! Перенаправление...');
         setTimeout(() => {
           navigate('/');
         }, 500);
@@ -71,7 +71,7 @@ const LoginPage = () => {
     setError('');
     setSuccess('');
     
-    // Валидатор вибратор
+    // Валидация
     if (registerData.password !== registerData.confirmPassword) {
       setError('Пароли не совпадают');
       return;
@@ -133,12 +133,12 @@ const LoginPage = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 flex items-center justify-center p-4">
-      {/* Жопная сторонка */}
+      {/* Background Pattern */}
       <div className="absolute inset-0 opacity-5 pointer-events-none">
         <div className="absolute inset-0 bg-[radial-gradient(circle,var(--tw-ring)/0.2_10%,transparent_10%)]"></div>
       </div>
 
-      {/* Переключатель тем */}
+      {/* Theme Toggle - Top Right */}
       <div className="absolute top-6 right-6 z-20">
         <div className="flex items-center gap-2 bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm rounded-lg p-2 shadow-lg">
           <Button 
@@ -178,7 +178,7 @@ const LoginPage = () => {
           </CardHeader>
           
           <CardContent>
-            {/* Ошибка/успешный вход */}
+            {/* Error/Success Messages */}
             {error && (
               <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex items-center gap-2 text-red-700 dark:text-red-400 animate-fade-in">
                 <AlertCircle className="w-4 h-4 flex-shrink-0" />
@@ -387,7 +387,7 @@ const LoginPage = () => {
             Узнать больше о MAKSUM ID
           </Button>
           <div className="flex justify-center items-center gap-4 text-sm text-gray-500 dark:text-gray-400">
-            <span>MAKSUM © 2025-2026</span>
+            <span>MAKSUM © 2006-2025</span>
             <span>•</span>
             <Button variant="link" className="h-auto p-0 text-sm">Условия</Button>
             <span>•</span>
