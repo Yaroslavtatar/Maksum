@@ -67,13 +67,19 @@ const ProfilePage = () => {
         {/* Cover Photo & Profile Info */}
         <Card className="mb-6">
           <div className="relative">
-            {/* Cover Photo */}
+            {/* Cover Photo / Украшение профиля и цветовая гамма */}
             <div 
               className="h-64 rounded-t-lg overflow-hidden relative"
               style={{
                 backgroundImage: user?.cover_photo 
                   ? `url(${user.cover_photo})` 
-                  : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  : user?.profile_accent === 'green' 
+                    ? 'linear-gradient(135deg, #10b981 0%, #0d9488 100%)'
+                    : user?.profile_accent === 'purple'
+                      ? 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)'
+                      : user?.profile_accent === 'teal'
+                        ? 'linear-gradient(135deg, #14b8a6 0%, #06b6d4 100%)'
+                        : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
                 backgroundSize: 'cover',
                 backgroundPosition: 'center',
               }}
@@ -110,9 +116,6 @@ const ProfilePage = () => {
                     <Camera className="w-5 h-5" />
                   </Button>
                 )}
-                {user && (
-                  <div className="absolute bottom-1 right-1 w-5 h-5 bg-green-500 rounded-full border-3 border-white shadow-md"></div>
-                )}
               </div>
             </div>
           </div>
@@ -126,30 +129,67 @@ const ProfilePage = () => {
                     В сети
                   </Badge>
                 </div>
-                <p className="text-gray-600 mb-4">{user?.email}</p>
-                
-                {user?.bio && (
-                  <p className="text-gray-700 dark:text-gray-300 mb-4">{user.bio}</p>
-                )}
-                
-                <div className="flex flex-wrap gap-4 text-sm text-gray-500 mb-4">
-                  {user?.location && (
-                    <div className="flex items-center">
-                      <MapPin className="w-4 h-4 mr-1" />
-                      {user.location}
+                <p className="text-muted-foreground mb-4">{user?.email}</p>
+
+                <div className="space-y-3 text-sm mb-4">
+                  {user?.phone && (
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-0.5">Телефон</p>
+                      <p className="text-foreground flex items-center gap-2">
+                        <Phone className="w-4 h-4 shrink-0" />
+                        {user.phone}
+                      </p>
                     </div>
                   )}
+                  {user?.bio && (
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-0.5">О себе</p>
+                      <p className="text-foreground">{user.bio}</p>
+                    </div>
+                  )}
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-0.5">Имя пользователя</p>
+                    <p className="text-foreground">@{user?.username}</p>
+                  </div>
                   {user?.birth_date && (
-                    <div className="flex items-center">
-                      <Calendar className="w-4 h-4 mr-1" />
-                      {user.birth_date}
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-0.5">День рождения</p>
+                      <p className="text-foreground flex items-center gap-2">
+                        <Calendar className="w-4 h-4 shrink-0" />
+                        {user.birth_date}
+                      </p>
                     </div>
                   )}
-                  <div className="flex items-center">
-                    <Users className="w-4 h-4 mr-1" />
+                  {user?.work_hours && (
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-0.5">Часы работы</p>
+                      <p className="text-foreground">{user.work_hours}</p>
+                    </div>
+                  )}
+                  {user?.location && (
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-0.5">Город</p>
+                      <p className="text-foreground flex items-center gap-2">
+                        <MapPin className="w-4 h-4 shrink-0" />
+                        {user.location}
+                      </p>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2 text-muted-foreground pt-1">
+                    <Users className="w-4 h-4 shrink-0" />
                     {friends.length} {friends.length === 1 ? 'друг' : friends.length < 5 ? 'друга' : 'друзей'}
                   </div>
                 </div>
+
+                {user?.community_name && (
+                  <div className="rounded-lg border border-border p-4 bg-muted/30 mb-4">
+                    <p className="font-medium text-foreground">{user.community_name}</p>
+                    {user.community_description && (
+                      <p className="text-sm text-muted-foreground mt-1">{user.community_description}</p>
+                    )}
+                    <p className="text-xs text-muted-foreground mt-1">Канал • сообщество</p>
+                  </div>
+                )}
 
                 <div className="flex space-x-6 text-sm">
                   <div className="text-center">
@@ -269,21 +309,42 @@ const ProfilePage = () => {
                   <CardContent className="space-y-4">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div>
-                        <p className="text-sm font-medium text-gray-500">Имя пользователя</p>
-                        <p className="text-sm">{user?.username || 'Не указано'}</p>
+                        <p className="text-xs text-muted-foreground mb-0.5">Имя пользователя</p>
+                        <p className="text-sm">@{user?.username || '—'}</p>
                       </div>
                       <div>
-                        <p className="text-sm font-medium text-gray-500">Email</p>
-                        <p className="text-sm">{user?.email || 'Не указано'}</p>
+                        <p className="text-xs text-muted-foreground mb-0.5">Email</p>
+                        <p className="text-sm">{user?.email || '—'}</p>
                       </div>
                       <div>
-                        <p className="text-sm font-medium text-gray-500">Город</p>
-                        <p className="text-sm">{user?.location || 'Не указано'}</p>
+                        <p className="text-xs text-muted-foreground mb-0.5">Телефон</p>
+                        <p className="text-sm">{user?.phone || '—'}</p>
                       </div>
                       <div>
-                        <p className="text-sm font-medium text-gray-500">О себе</p>
-                        <p className="text-sm">{user?.bio || 'Не указано'}</p>
+                        <p className="text-xs text-muted-foreground mb-0.5">Город</p>
+                        <p className="text-sm">{user?.location || '—'}</p>
                       </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-0.5">День рождения</p>
+                        <p className="text-sm">{user?.birth_date || '—'}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-0.5">Часы работы</p>
+                        <p className="text-sm">{user?.work_hours || '—'}</p>
+                      </div>
+                      <div className="md:col-span-2">
+                        <p className="text-xs text-muted-foreground mb-0.5">О себе</p>
+                        <p className="text-sm">{user?.bio || '—'}</p>
+                      </div>
+                      {user?.community_name && (
+                        <div className="md:col-span-2">
+                          <p className="text-xs text-muted-foreground mb-0.5">Сообщество / канал</p>
+                          <p className="text-sm font-medium">{user.community_name}</p>
+                          {user?.community_description && (
+                            <p className="text-sm text-muted-foreground mt-1">{user.community_description}</p>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </CardContent>
                 </Card>

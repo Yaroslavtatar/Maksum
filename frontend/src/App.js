@@ -16,6 +16,7 @@ import MusicPage from "./pages/MusicPage";
 import SettingsPage from "./pages/SettingsPage";
 import UserProfile from "./pages/UserProfile";
 import UsersPage from "./pages/UsersPage";
+import MediaPage from "./pages/MediaPage";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8001';
 const API = `${BACKEND_URL}/api`;
@@ -121,6 +122,12 @@ function App() {
           <Route path="/music" element={
             <ProtectedRoute>
               <MusicPage />
+            </ProtectedRoute>
+          } />
+
+          <Route path="/media" element={
+            <ProtectedRoute>
+              <MediaPage />
             </ProtectedRoute>
           } />
 

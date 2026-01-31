@@ -327,6 +327,11 @@ async def init_db():
                 await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS location VARCHAR(255)")
                 await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS birth_date VARCHAR(50)")
                 await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS cover_photo VARCHAR(1024)")
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(50)")
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS work_hours VARCHAR(255)")
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_accent VARCHAR(50)")
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS community_name VARCHAR(255)")
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS community_description TEXT")
             except:
                 pass
             
@@ -502,6 +507,16 @@ async def init_db():
                     await conn.execute("ALTER TABLE users ADD COLUMN birth_date VARCHAR(50) NULL")
                 if 'cover_photo' not in columns:
                     await conn.execute("ALTER TABLE users ADD COLUMN cover_photo VARCHAR(1024) NULL")
+                if 'phone' not in columns:
+                    await conn.execute("ALTER TABLE users ADD COLUMN phone VARCHAR(50) NULL")
+                if 'work_hours' not in columns:
+                    await conn.execute("ALTER TABLE users ADD COLUMN work_hours VARCHAR(255) NULL")
+                if 'profile_accent' not in columns:
+                    await conn.execute("ALTER TABLE users ADD COLUMN profile_accent VARCHAR(50) NULL")
+                if 'community_name' not in columns:
+                    await conn.execute("ALTER TABLE users ADD COLUMN community_name VARCHAR(255) NULL")
+                if 'community_description' not in columns:
+                    await conn.execute("ALTER TABLE users ADD COLUMN community_description TEXT NULL")
             except Exception as e:
                 logger.warning(f"Миграция колонок users: {e}")
             
@@ -529,6 +544,15 @@ async def init_db():
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON messages(conversation_id, created_at)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_status_checks_timestamp ON status_checks(timestamp)")
             # Таблицы для системы рекомендаций: теги и подписки (SQLite)
+            # Миграция: пересоздать post_tags/user_tag_subscriptions, если схема старая (нет tag_id)
+            try:
+                async with conn.execute("PRAGMA table_info(post_tags)") as cursor:
+                    cols = [row[1] for row in await cursor.fetchall()]
+                if cols and 'tag_id' not in cols:
+                    await conn.execute("DROP TABLE IF EXISTS post_tags")
+                    await conn.execute("DROP TABLE IF EXISTS user_tag_subscriptions")
+            except Exception:
+                pass
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS tags (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,

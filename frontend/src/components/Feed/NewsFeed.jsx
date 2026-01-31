@@ -4,14 +4,16 @@ import { Textarea } from '../ui/textarea';
 import { Card, CardContent, CardHeader } from '../ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
 import { useUser } from '../../context/UserContext';
-import { Heart, MessageCircle, Share, Image, Video, Smile, Plus, Loader2 } from 'lucide-react';
+import { Image, Video, Smile, Plus, Loader2 } from 'lucide-react';
 import PostCard from './PostCard';
+import UserPreviewModal from '../Profile/UserPreviewModal';
 
 const NewsFeed = () => {
   const { user, feedPosts, fetchFeed, createPost, likePost } = useUser();
   const [newPost, setNewPost] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [previewUserId, setPreviewUserId] = useState(null);
 
   useEffect(() => {
     const loadFeed = async () => {
@@ -63,50 +65,44 @@ const NewsFeed = () => {
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       {/* Create Post */}
-      <Card className="animate-slide-down">
-        <CardHeader className="pb-3">
-          <div className="flex items-center space-x-3">
-            <Avatar className="animate-scale-hover">
+      <Card className="overflow-hidden border-border bg-card">
+        <form onSubmit={handleCreatePost}>
+          <div className="p-4 flex gap-3">
+            <Avatar className="h-10 w-10 shrink-0 border-2 border-border">
               <AvatarImage src={user?.avatar_url} alt={user?.username} />
-              <AvatarFallback>{(user?.username || 'U')[0].toUpperCase()}</AvatarFallback>
+              <AvatarFallback className="text-sm bg-muted text-muted-foreground">
+                {(user?.username || 'U')[0].toUpperCase()}
+              </AvatarFallback>
             </Avatar>
-            <div className="flex-1">
-              <form onSubmit={handleCreatePost}>
-                <Textarea
-                  placeholder="Что у вас нового?"
-                  value={newPost}
-                  onChange={(e) => setNewPost(e.target.value)}
-                  className="resize-none border-0 p-0 focus:ring-0 text-base transition-all duration-300 focus:scale-105"
-                  rows={3}
-                />
-              </form>
-            </div>
+            <Textarea
+              placeholder="Что у вас нового?"
+              value={newPost}
+              onChange={(e) => setNewPost(e.target.value)}
+              className="min-h-[88px] resize-none border-0 bg-transparent px-0 text-base placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
+              rows={3}
+            />
           </div>
-        </CardHeader>
-        <CardContent className="pt-0">
-          <div className="flex items-center justify-between">
-            <div className="flex space-x-4">
-              <Button variant="ghost" size="sm" className="text-gray-600 hover:text-blue-600 animate-scale-hover">
-                <Image className="w-4 h-4 mr-2" />
-                Фото
+          <div className="flex items-center justify-between gap-3 px-4 py-3 border-t border-border bg-muted/30">
+            <div className="flex items-center gap-1">
+              <Button type="button" variant="ghost" size="icon" className="h-9 w-9 text-muted-foreground hover:text-foreground hover:bg-muted" title="Фото">
+                <Image className="h-4 w-4" />
               </Button>
-              <Button variant="ghost" size="sm" className="text-gray-600 hover:text-blue-600 animate-scale-hover">
-                <Video className="w-4 h-4 mr-2" />
-                Видео
+              <Button type="button" variant="ghost" size="icon" className="h-9 w-9 text-muted-foreground hover:text-foreground hover:bg-muted" title="Видео">
+                <Video className="h-4 w-4" />
               </Button>
-              <Button variant="ghost" size="sm" className="text-gray-600 hover:text-blue-600 animate-scale-hover">
-                <Smile className="w-4 h-4 mr-2" />
-                Эмоция
+              <Button type="button" variant="ghost" size="icon" className="h-9 w-9 text-muted-foreground hover:text-foreground hover:bg-muted" title="Эмоция">
+                <Smile className="h-4 w-4" />
               </Button>
             </div>
-            <Button 
-              onClick={handleCreatePost}
+            <Button
+              type="submit"
               disabled={!newPost.trim() || isSubmitting}
-              className="bg-blue-500 hover:bg-blue-600 transition-all duration-300 hover:scale-105 disabled:opacity-50 disabled:scale-100"
+              size="sm"
+              className="rounded-full px-5 font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             >
               {isSubmitting ? (
                 <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                   Публикация...
                 </>
               ) : (
@@ -114,7 +110,7 @@ const NewsFeed = () => {
               )}
             </Button>
           </div>
-        </CardContent>
+        </form>
       </Card>
 
       {/* Empty State */}
@@ -154,10 +150,17 @@ const NewsFeed = () => {
             <PostCard 
               post={post} 
               onLike={() => handleLikePost(post.id)}
+              onAuthorClick={post.author_id !== user?.id ? setPreviewUserId : undefined}
             />
           </div>
         ))}
       </div>
+
+      <UserPreviewModal
+        userId={previewUserId}
+        open={!!previewUserId}
+        onClose={() => setPreviewUserId(null)}
+      />
 
       {/* Load More (if there are posts) */}
       {feedPosts.length > 0 && (

@@ -1,0 +1,152 @@
+import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Dialog, DialogContent } from '../ui/dialog';
+import { Button } from '../ui/button';
+import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
+import { Badge } from '../ui/badge';
+import api from '../../api/axios';
+import {
+  Phone,
+  Calendar,
+  User,
+  ExternalLink,
+  Loader2,
+  Shield,
+} from 'lucide-react';
+
+const ACCENT_COLORS = {
+  blue: 'from-blue-500 to-blue-700',
+  green: 'from-emerald-500 to-teal-700',
+  purple: 'from-purple-500 to-violet-700',
+  teal: 'from-teal-400 to-cyan-600',
+};
+
+const UserPreviewModal = ({ userId, open, onClose }) => {
+  const navigate = useNavigate();
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open || !userId) {
+      setUser(null);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    api.get(`/users/${userId}`)
+      .then((res) => {
+        if (!cancelled) setUser(res.data);
+      })
+      .catch(() => {
+        if (!cancelled) setUser(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [userId, open]);
+
+  const handleOpenFull = () => {
+    onClose();
+    navigate(`/users/${userId}`);
+  };
+
+  const accentClass = user?.profile_accent && ACCENT_COLORS[user.profile_accent]
+    ? ACCENT_COLORS[user.profile_accent]
+    : 'from-blue-500 to-purple-600';
+
+  return (
+    <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
+      <DialogContent className="max-w-md p-0 overflow-hidden gap-0 bg-card border-border">
+        {loading ? (
+          <div className="py-12 flex justify-center">
+            <Loader2 className="w-8 h-8 animate-spin text-primary" />
+          </div>
+        ) : user ? (
+          <>
+            {/* Украшение профиля / цветовая гамма */}
+            <div className={`h-20 bg-gradient-to-br ${accentClass} relative`} />
+            <div className="px-4 pb-4 -mt-12 relative z-10">
+              <Avatar className="w-24 h-24 border-4 border-background shadow-xl ring-2 ring-background">
+                <AvatarImage src={user.avatar_url} alt={user.username} />
+                <AvatarFallback className="text-3xl bg-muted text-muted-foreground">
+                  {(user.username || 'U')[0].toUpperCase()}
+                </AvatarFallback>
+              </Avatar>
+              <div className="mt-3 flex items-center gap-2 flex-wrap">
+                <h2 className="text-xl font-bold text-foreground">{user.username}</h2>
+                <Badge variant="outline" className="text-green-600 border-green-600 text-xs flex items-center gap-1">
+                  <Shield className="w-3 h-3" />
+                  В сети
+                </Badge>
+              </div>
+
+              <div className="mt-5 space-y-4 text-sm">
+                {user.phone && (
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-1">Телефон</p>
+                    <p className="text-foreground flex items-center gap-2">
+                      <Phone className="w-4 h-4 shrink-0 text-muted-foreground" />
+                      {user.phone}
+                    </p>
+                  </div>
+                )}
+                {user.bio && (
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-1">О себе</p>
+                    <p className="text-foreground">{user.bio}</p>
+                  </div>
+                )}
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Имя пользователя</p>
+                  <p className="text-foreground flex items-center gap-2">
+                    <User className="w-4 h-4 shrink-0 text-muted-foreground" />
+                    @{user.username}
+                  </p>
+                </div>
+                {user.birth_date && (
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-1">День рождения</p>
+                    <p className="text-foreground flex items-center gap-2">
+                      <Calendar className="w-4 h-4 shrink-0 text-muted-foreground" />
+                      {user.birth_date}
+                    </p>
+                  </div>
+                )}
+                {user.work_hours && (
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-1">Часы работы</p>
+                    <p className="text-foreground">{user.work_hours}</p>
+                  </div>
+                )}
+                {user.community_name && (
+                  <div className="rounded-lg border border-border p-3 bg-muted/40">
+                    <p className="font-medium text-foreground">{user.community_name}</p>
+                    {user.community_description && (
+                      <p className="text-xs text-muted-foreground mt-1">{user.community_description}</p>
+                    )}
+                    <p className="text-xs text-muted-foreground mt-1">Канал • сообщество</p>
+                  </div>
+                )}
+              </div>
+
+              <Button
+                className="w-full mt-5 rounded-lg"
+                onClick={handleOpenFull}
+              >
+                <ExternalLink className="w-4 h-4 mr-2" />
+                Открыть полностью
+              </Button>
+            </div>
+          </>
+        ) : (
+          <div className="py-8 text-center text-muted-foreground">
+            Пользователь не найден
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+export default UserPreviewModal;

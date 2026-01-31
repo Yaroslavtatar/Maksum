@@ -15,6 +15,11 @@ const EditProfileModal = ({ open, onClose, user, onUpdate }) => {
     bio: user?.bio || '',
     location: user?.location || '',
     birth_date: user?.birth_date || '',
+    phone: user?.phone || '',
+    work_hours: user?.work_hours || '',
+    profile_accent: user?.profile_accent || 'blue',
+    community_name: user?.community_name || '',
+    community_description: user?.community_description || '',
   });
   const [avatarPreview, setAvatarPreview] = useState(user?.avatar_url || '');
   const [coverPreview, setCoverPreview] = useState(user?.cover_photo || '');
@@ -32,6 +37,11 @@ const EditProfileModal = ({ open, onClose, user, onUpdate }) => {
         bio: user.bio || '',
         location: user.location || '',
         birth_date: user.birth_date || '',
+        phone: user.phone || '',
+        work_hours: user.work_hours || '',
+        profile_accent: user.profile_accent || 'blue',
+        community_name: user.community_name || '',
+        community_description: user.community_description || '',
       });
       setAvatarPreview(user.avatar_url || '');
       setCoverPreview(user.cover_photo || '');
@@ -280,6 +290,61 @@ const EditProfileModal = ({ open, onClose, user, onUpdate }) => {
               value={formData.birth_date}
               onChange={(e) => setFormData({ ...formData, birth_date: e.target.value })}
               placeholder="15 мая 1995"
+            />
+          </div>
+
+          {/* Phone */}
+          <div>
+            <Label htmlFor="phone">Телефон</Label>
+            <Input
+              id="phone"
+              value={formData.phone}
+              onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+              placeholder="+7 999 123 45 67"
+            />
+          </div>
+
+          {/* Work Hours */}
+          <div>
+            <Label htmlFor="work_hours">Часы работы</Label>
+            <Input
+              id="work_hours"
+              value={formData.work_hours}
+              onChange={(e) => setFormData({ ...formData, work_hours: e.target.value })}
+              placeholder="10:00 - 23:00 или Открыто"
+            />
+          </div>
+
+          {/* Цветовая гамма / украшение профиля */}
+          <div>
+            <Label htmlFor="profile_accent">Цветовая гамма профиля</Label>
+            <select
+              id="profile_accent"
+              value={formData.profile_accent}
+              onChange={(e) => setFormData({ ...formData, profile_accent: e.target.value })}
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            >
+              <option value="blue">Синий</option>
+              <option value="green">Зелёный</option>
+              <option value="purple">Фиолетовый</option>
+              <option value="teal">Бирюзовый</option>
+            </select>
+          </div>
+
+          {/* Привязка сообщества */}
+          <div>
+            <Label htmlFor="community_name">Сообщество / канал</Label>
+            <Input
+              id="community_name"
+              value={formData.community_name}
+              onChange={(e) => setFormData({ ...formData, community_name: e.target.value })}
+              placeholder="Название сообщества"
+            />
+            <Input
+              className="mt-2"
+              value={formData.community_description}
+              onChange={(e) => setFormData({ ...formData, community_description: e.target.value })}
+              placeholder="Описание (например: Канал • 40 подписчиков)"
             />
           </div>
 

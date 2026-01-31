@@ -17,28 +17,43 @@ import {
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu';
 
-const PostCard = ({ post, onLike }) => {
+const PostCard = ({ post, onLike, onAuthorClick }) => {
   const [showComments, setShowComments] = useState(false);
 
   // Поддержка обоих форматов (старый mock и новый API)
   const authorName = post.author?.name || post.author_username || 'Пользователь';
   const authorAvatar = post.author?.avatar || post.author_avatar;
+  const authorId = post.author_id ?? post.author?.id;
   const timestamp = post.timestamp || (post.created_at ? new Date(post.created_at).toLocaleString('ru-RU') : '');
+
+  const authorBlock = (
+    <div className="flex items-center space-x-3">
+      <Avatar className={onAuthorClick && authorId ? 'cursor-pointer ring-2 ring-transparent hover:ring-primary/50 transition-all' : ''}>
+        <AvatarImage src={authorAvatar} alt={authorName} />
+        <AvatarFallback>{(authorName || 'U')[0].toUpperCase()}</AvatarFallback>
+      </Avatar>
+      <div>
+        <p className={`font-medium text-sm ${onAuthorClick && authorId ? 'cursor-pointer hover:text-primary' : ''}`}>{authorName}</p>
+        <p className="text-xs text-gray-500">{timestamp}</p>
+      </div>
+    </div>
+  );
 
   return (
     <Card className="hover:shadow-md transition-shadow">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <Avatar>
-              <AvatarImage src={authorAvatar} alt={authorName} />
-              <AvatarFallback>{(authorName || 'U')[0].toUpperCase()}</AvatarFallback>
-            </Avatar>
-            <div>
-              <p className="font-medium text-sm">{authorName}</p>
-              <p className="text-xs text-gray-500">{timestamp}</p>
-            </div>
-          </div>
+          {onAuthorClick && authorId ? (
+            <button
+              type="button"
+              className="text-left flex items-center space-x-3 focus:outline-none focus:ring-0"
+              onClick={() => onAuthorClick(authorId)}
+            >
+              {authorBlock}
+            </button>
+          ) : (
+            authorBlock
+          )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="sm">
