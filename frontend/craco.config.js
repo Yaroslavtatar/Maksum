@@ -7,12 +7,15 @@ const config = {
 };
 
 module.exports = {
+  devServer: (devServerConfig) => {
+    // При HOST=0.0.0.0 CRA подставляет allowedHosts с пустой строкой — принудительно (доступ по IP)
+    return { ...devServerConfig, allowedHosts: 'all' };
+  },
   webpack: {
     alias: {
       '@': path.resolve(__dirname, 'src'),
     },
     configure: (webpackConfig) => {
-      
       // Disable hot reload completely if environment variable is set
       if (config.disableHotReload) {
         // Remove hot reload related plugins

@@ -71,17 +71,14 @@ def start_frontend() -> subprocess.Popen:
     env["HOST"] = FRONTEND_HOST
     env["PORT"] = FRONTEND_PORT
     env["BROWSER"] = "none"  # не открывать браузер автоматически
-    # Пустой REACT_APP_BACKEND_URL = относительный /api; dev-сервер проксирует на бэкенд (proxy в package.json)
-    if "REACT_APP_BACKEND_URL" not in env:
-        env["REACT_APP_BACKEND_URL"] = ""
+    # Фронт обращается только на localhost:8001
+    env["REACT_APP_BACKEND_URL"] = f"http://{BACKEND_HOST}:{BACKEND_PORT}"
 
     use_yarn = os.path.isfile(os.path.join(FRONTEND_DIR, "yarn.lock"))
     if use_yarn:
-        run_cmd = "yarn.cmd" if platform.system() == "Windows" else "yarn"
-        cmd = [run_cmd, "start"]
+        cmd = "yarn start"
     else:
-        run_cmd = "npm.cmd" if platform.system() == "Windows" else "npm"
-        cmd = [run_cmd, "run", "start"]
+        cmd = "npm run start"
     proc = subprocess.Popen(
         cmd,
         cwd=FRONTEND_DIR,
