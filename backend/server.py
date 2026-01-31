@@ -244,12 +244,9 @@ def get_status_from_last_seen(last_seen) -> str:
     if last_seen is None:
         return "offline"
     try:
-        if hasattr(last_seen, "timestamp"):
-            ts = last_seen.timestamp()
-        else:
-            ts = (last_seen - datetime(1970, 1, 1)).total_seconds() if hasattr(last_seen, "__sub__") else 0
-        now_ts = datetime.utcnow().timestamp()
-        delta = now_ts - ts
+        now = datetime.utcnow()
+        ls = last_seen.replace(tzinfo=None) if getattr(last_seen, "tzinfo", None) else last_seen
+        delta = (now - ls).total_seconds()
         if delta <= 300:
             return "online"
         if delta <= 1800:
