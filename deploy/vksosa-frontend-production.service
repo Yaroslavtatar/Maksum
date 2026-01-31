@@ -1,0 +1,28 @@
+# Вариант для продакшена: раздача собранного билда (без dev-сервера и WebSocket HMR).
+# Перед первым запуском выполните в frontend: yarn build
+# Требуется: npm install -g serve (или npx serve)
+
+[Unit]
+Description=VK SOSA Frontend (Production build)
+After=network.target vksosa-backend.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+
+WorkingDirectory=/var/www/vksosa/frontend
+
+# serve раздаёт папку build на порту 3000, слушает все интерфейсы
+ExecStart=/usr/bin/npx serve -s build -l 3000
+
+Restart=always
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vksosa-frontend
+
+[Install]
+WantedBy=multi-user.target
