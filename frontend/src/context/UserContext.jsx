@@ -196,6 +196,15 @@ export const UserProvider = ({ children }) => {
     };
   }, [fetchUser]);
 
+  // Пинг активности для статуса «В сети» (обновление last_seen каждые 60 сек)
+  useEffect(() => {
+    if (!user) return;
+    const ping = () => api.post('/users/me/ping').catch(() => {});
+    ping();
+    const id = setInterval(ping, 60000);
+    return () => clearInterval(id);
+  }, [user]);
+
   const value = {
     user,
     loading,

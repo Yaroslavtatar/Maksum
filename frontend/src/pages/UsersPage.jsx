@@ -7,6 +7,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '../components/ui/avatar';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../api/axios';
 import { Search, UserPlus, MessageCircle, Loader2, AlertCircle } from 'lucide-react';
+import StatusBadge from '../components/Profile/StatusBadge';
 
 const UsersPage = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -114,7 +115,10 @@ const UsersPage = () => {
                     <AvatarFallback>{(u.username || 'U')[0].toUpperCase()}</AvatarFallback>
                   </Avatar>
                   <div className="flex-1 min-w-0">
-                    <div className="font-medium truncate">{u.username}</div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium truncate">{u.username}</span>
+                      <StatusBadge status={u.status} className="text-xs shrink-0" />
+                    </div>
                     <div className="text-sm text-muted-foreground truncate">{u.email}</div>
                   </div>
                 </div>

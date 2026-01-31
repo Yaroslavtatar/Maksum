@@ -272,6 +272,12 @@ async def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depend
                 row = await cursor.fetchone()
         if not row:
             raise HTTPException(status_code=401, detail="User not found")
+        # Обновляем last_seen при каждом запросе — тогда статус «В сети» реальный
+        if db_type == 'postgresql':
+            await conn.execute("UPDATE users SET last_seen = NOW() WHERE id = $1", user_id)
+        else:
+            await conn.execute("UPDATE users SET last_seen = datetime('now') WHERE id = ?", (user_id,))
+            await conn.commit()
     return user_id
 
 
@@ -356,7 +362,7 @@ async def register_user(data: RegisterInput):
             )
             await conn.commit()
             user_id = cursor.lastrowid
-        return UserPublic(id=user_id, username=data.username, email=data.email, avatar_url=None)
+            return UserPublic(id=user_id, username=data.username, email=data.email, avatar_url=None)
 
 @api_router.post("/auth/login", response_model=TokenResponse)
 async def login_user(data: LoginInput):
@@ -379,12 +385,12 @@ async def login_user(data: LoginInput):
                     user = {"id": row[0], "password_hash": row[1], "is_banned": bool(row[2]) if len(row) > 2 else False}
                 else:
                     user = None
-        if not user or not verify_password(data.password, user["password_hash"]):
-            raise HTTPException(status_code=401, detail="Invalid credentials")
+            if not user or not verify_password(data.password, user["password_hash"]):
+                raise HTTPException(status_code=401, detail="Invalid credentials")
         if user.get("is_banned"):
             raise HTTPException(status_code=403, detail="Account is banned")
-        token = create_access_token({"sub": str(user["id"])})
-        return TokenResponse(access_token=token)
+            token = create_access_token({"sub": str(user["id"])})
+            return TokenResponse(access_token=token)
 
 # ===================== Users API =====================
 @api_router.get("/users/me")
@@ -394,14 +400,14 @@ async def get_me(user_id: int = Depends(get_current_user_id)):
     async with get_db() as conn:
         if db_type == 'postgresql':
             row = await conn.fetchrow(
-                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, is_admin, is_banned FROM users WHERE id = $1",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, is_admin, is_banned, last_seen FROM users WHERE id = $1",
                 user_id
             )
             if row:
                 row = dict(row)
         else:  # sqlite
             async with conn.execute(
-                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, is_admin, is_banned FROM users WHERE id = ?",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, is_admin, is_banned, last_seen FROM users WHERE id = ?",
                 (user_id,)
             ) as cursor:
                 row_data = await cursor.fetchone()
@@ -422,16 +428,29 @@ async def get_me(user_id: int = Depends(get_current_user_id)):
                         "community_description": row_data[12] if len(row_data) > 12 else None,
                         "is_admin": bool(row_data[13]) if len(row_data) > 13 else False,
                         "is_banned": bool(row_data[14]) if len(row_data) > 14 else False,
+                        "last_seen": row_data[15] if len(row_data) > 15 else None,
                     }
                 else:
                     row = None
-        if not row:
-            raise HTTPException(status_code=404, detail="User not found")
-        # Не отдаём is_admin/is_banned в публичные эндпоинты — только в /users/me; для postgres row уже dict
+            if not row:
+                raise HTTPException(status_code=404, detail="User not found")
         if db_type == 'postgresql' and row:
             row.setdefault("is_admin", False)
             row.setdefault("is_banned", False)
+        row["status"] = get_status_from_last_seen(row.get("last_seen"))
         return row
+
+@api_router.post("/users/me/ping")
+async def ping_activity(user_id: int = Depends(get_current_user_id)):
+    """Обновить last_seen текущего пользователя (вызывать периодически с фронта)."""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            await conn.execute("UPDATE users SET last_seen = NOW() WHERE id = $1", user_id)
+        else:
+            await conn.execute("UPDATE users SET last_seen = datetime('now') WHERE id = ?", (user_id,))
+            await conn.commit()
+    return {"status": "ok"}
 
 @api_router.get("/users/username/{username}")
 async def get_user_by_username(username: str, _uid: int = Depends(get_current_user_id)):
@@ -443,14 +462,14 @@ async def get_user_by_username(username: str, _uid: int = Depends(get_current_us
     async with get_db() as conn:
         if db_type == 'postgresql':
             row = await conn.fetchrow(
-                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description FROM users WHERE username = $1",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, last_seen FROM users WHERE username = $1",
                 username
             )
             if row:
                 row = dict(row)
         else:  # sqlite
             async with conn.execute(
-                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description FROM users WHERE username = ?",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, last_seen FROM users WHERE username = ?",
                 (username,)
             ) as cursor:
                 row_data = await cursor.fetchone()
@@ -469,11 +488,13 @@ async def get_user_by_username(username: str, _uid: int = Depends(get_current_us
                         "profile_accent": row_data[10] if len(row_data) > 10 else None,
                         "community_name": row_data[11] if len(row_data) > 11 else None,
                         "community_description": row_data[12] if len(row_data) > 12 else None,
+                        "last_seen": row_data[13] if len(row_data) > 13 else None,
                     }
                 else:
                     row = None
         if not row:
             raise HTTPException(status_code=404, detail="User not found")
+        row["status"] = get_status_from_last_seen(row.get("last_seen"))
     return row
 
 
@@ -486,14 +507,14 @@ async def search_users(q: Optional[str] = None, _uid: int = Depends(get_current_
             if q and q.strip():
                 like = f"%{q.strip()}%"
                 rows = await conn.fetch(
-                    """SELECT id, username, email, avatar_url FROM users
+                    """SELECT id, username, email, avatar_url, last_seen FROM users
                        WHERE id != $1 AND (is_banned IS NOT TRUE OR is_banned IS NULL)
                        AND (username ILIKE $2 OR email ILIKE $2) ORDER BY username LIMIT 50""",
                     _uid, like
                 )
             else:
                 rows = await conn.fetch(
-                    """SELECT id, username, email, avatar_url FROM users
+                    """SELECT id, username, email, avatar_url, last_seen FROM users
                        WHERE id != $1 AND (is_banned IS NOT TRUE OR is_banned IS NULL)
                        ORDER BY id DESC LIMIT 50""",
                     _uid
@@ -503,22 +524,24 @@ async def search_users(q: Optional[str] = None, _uid: int = Depends(get_current_
             if q and q.strip():
                 like = f"%{q.strip()}%"
                 async with conn.execute(
-                    """SELECT id, username, email, avatar_url FROM users
+                    """SELECT id, username, email, avatar_url, last_seen FROM users
                        WHERE id != ? AND (is_banned = 0 OR is_banned IS NULL)
                        AND (username LIKE ? OR email LIKE ?) ORDER BY username LIMIT 50""",
                     (_uid, like, like)
                 ) as cursor:
                     rows_data = await cursor.fetchall()
-                    rows = [{"id": r[0], "username": r[1], "email": r[2], "avatar_url": r[3]} for r in rows_data]
+                    rows = [{"id": r[0], "username": r[1], "email": r[2], "avatar_url": r[3], "last_seen": r[4] if len(r) > 4 else None} for r in rows_data]
             else:
                 async with conn.execute(
-                    """SELECT id, username, email, avatar_url FROM users
+                    """SELECT id, username, email, avatar_url, last_seen FROM users
                        WHERE id != ? AND (is_banned = 0 OR is_banned IS NULL)
                        ORDER BY id DESC LIMIT 50""",
                     (_uid,)
                 ) as cursor:
                     rows_data = await cursor.fetchall()
-                    rows = [{"id": r[0], "username": r[1], "email": r[2], "avatar_url": r[3]} for r in rows_data]
+                    rows = [{"id": r[0], "username": r[1], "email": r[2], "avatar_url": r[3], "last_seen": r[4] if len(r) > 4 else None} for r in rows_data]
+        for r in rows:
+            r["status"] = get_status_from_last_seen(r.get("last_seen"))
         return [UserSearchResponse(**r) for r in rows]
 
 
@@ -529,14 +552,14 @@ async def get_user_by_id(id: int, _uid: int = Depends(get_current_user_id)):
     async with get_db() as conn:
         if db_type == 'postgresql':
             row = await conn.fetchrow(
-                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description FROM users WHERE id = $1",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, last_seen FROM users WHERE id = $1",
                 id
             )
             if row:
                 row = dict(row)
         else:  # sqlite
             async with conn.execute(
-                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description FROM users WHERE id = ?",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, last_seen FROM users WHERE id = ?",
                 (id,)
             ) as cursor:
                 row_data = await cursor.fetchone()
@@ -555,13 +578,14 @@ async def get_user_by_id(id: int, _uid: int = Depends(get_current_user_id)):
                         "profile_accent": row_data[10] if len(row_data) > 10 else None,
                         "community_name": row_data[11] if len(row_data) > 11 else None,
                         "community_description": row_data[12] if len(row_data) > 12 else None,
+                        "last_seen": row_data[13] if len(row_data) > 13 else None,
                     }
                 else:
                     row = None
-        
-        if not row:
-            raise HTTPException(status_code=404, detail="User not found")
-        return row
+            if not row:
+                raise HTTPException(status_code=404, detail="User not found")
+        row["status"] = get_status_from_last_seen(row.get("last_seen"))
+    return row
 
 @api_router.put("/users/me", response_model=UserPublic)
 async def update_me(data: UserUpdate, user_id: int = Depends(get_current_user_id)):
@@ -733,7 +757,7 @@ async def get_status_checks():
                 rows_data = await cursor.fetchall()
                 columns = [desc[0] for desc in cursor.description]
                 rows = [dict(zip(columns, r)) for r in rows_data]
-        return [StatusCheck(**row) for row in rows]
+            return [StatusCheck(**row) for row in rows]
 
 # Theme API endpoints
 @api_router.get("/user/theme", response_model=UserThemeResponse)
@@ -816,7 +840,6 @@ async def update_user_theme(
         else:  # sqlite
             async with conn.execute("SELECT id FROM users WHERE id = ?", (user_id,)) as cursor:
                 user_exists = await cursor.fetchone()
-            
             if not user_exists:
                 await conn.execute(
                     """INSERT INTO users (id, username, email, password_hash, theme_mode, theme_palette)
@@ -844,9 +867,8 @@ async def get_my_avatar(user_id: int = Depends(get_current_user_id)):
             async with conn.execute("SELECT avatar_url FROM users WHERE id = ?", (user_id,)) as cursor:
                 row = await cursor.fetchone()
             avatar_url = row[0] if row else None
-        
-            if avatar_url:
-                return RedirectResponse(url=avatar_url)
+        if avatar_url:
+            return RedirectResponse(url=avatar_url)
 
     # SVG силуэт человека на сером фоне 128x128
     svg = (
@@ -942,20 +964,20 @@ async def send_friend_request(data: FriendAction, user_id: int = Depends(get_cur
                 row_data = await cursor.fetchone()
                 row = {"id": row_data[0], "requester_id": row_data[1], "addressee_id": row_data[2], "status": row_data[3]} if row_data else None
 
-        if row:
-            if row["status"] == 'accepted':
-                raise HTTPException(status_code=400, detail="Already friends")
-            if row["requester_id"] == user_id and row["status"] == 'pending':
-                raise HTTPException(status_code=400, detail="Request already sent")
-            if row["addressee_id"] == user_id and row["status"] == 'pending':
-                if db_type == 'postgresql':
-                    await conn.execute("UPDATE friendships SET status='accepted' WHERE id=$1", row["id"])
-                else:
-                    await conn.execute("UPDATE friendships SET status='accepted' WHERE id=?", (row["id"],))
-                    await conn.commit()
-                return {"status": "accepted"}
+            if row:
+                if row["status"] == 'accepted':
+                    raise HTTPException(status_code=400, detail="Already friends")
+                if row["requester_id"] == user_id and row["status"] == 'pending':
+                    raise HTTPException(status_code=400, detail="Request already sent")
+                if row["addressee_id"] == user_id and row["status"] == 'pending':
+                    if db_type == 'postgresql':
+                        await conn.execute("UPDATE friendships SET status='accepted' WHERE id=$1", row["id"])
+                    else:
+                        await conn.execute("UPDATE friendships SET status='accepted' WHERE id=?", (row["id"],))
+                        await conn.commit()
+                    return {"status": "accepted"}
 
-        # create new pending
+            # create new pending
         if db_type == 'postgresql':
             await conn.execute(
                 "INSERT INTO friendships (requester_id, addressee_id, status) VALUES ($1, $2, 'pending')",
@@ -975,7 +997,6 @@ async def send_friend_request(data: FriendAction, user_id: int = Depends(get_cur
             actor_id=user_id,
             content="отправил(а) вам заявку в друзья"
         )
-        
         return {"status": "pending"}
 
 @api_router.post("/friends/accept")
@@ -1005,7 +1026,6 @@ async def accept_friend_request(data: FriendAction, user_id: int = Depends(get_c
             actor_id=user_id,
             content="принял(а) вашу заявку в друзья"
         )
-        
         return {"status": "accepted"}
 
 @api_router.post("/friends/remove")
@@ -1973,7 +1993,7 @@ async def send_message(data: MessageSend, user_id: int = Depends(get_current_use
                 content="отправил(а) вам сообщение"
             )
         
-        return {"status": "sent", "conversation_id": conversation_id}
+            return {"status": "sent", "conversation_id": conversation_id}
 
 # ===================== Notifications API =====================
 @api_router.get("/notifications")

@@ -4,9 +4,9 @@ import MainLayout from '../components/Layout/MainLayout';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '../components/ui/avatar';
-import { Badge } from '../components/ui/badge';
 import api from '../api/axios';
 import { useUser } from '../context/UserContext';
+import StatusBadge from '../components/Profile/StatusBadge';
 import { UserPlus, MessageCircle, Loader2, MapPin, Calendar, Users, Phone } from 'lucide-react';
 
 const ACCENT_STYLES = {
@@ -156,6 +156,7 @@ const UserProfile = ({ username: usernameProp }) => {
               <div className="flex-1">
                 <div className="flex items-center space-x-3 mb-2">
                   <h1 className="text-2xl font-bold">{user.username}</h1>
+                  <StatusBadge status={user.status} />
                 </div>
                 <p className="text-muted-foreground mb-4">{user.email}</p>
 

@@ -57,7 +57,15 @@ const Sidebar = () => {
             <p className="text-sm font-medium text-foreground truncate">
               {user?.username || 'Пользователь'}
             </p>
-            <p className="text-xs text-green-500">В сети</p>
+            <p className="text-xs text-muted-foreground">
+              {user?.status === 'online' ? (
+                <span className="text-green-500">В сети</span>
+              ) : user?.status === 'inactive' ? (
+                <span className="text-amber-500">Неактивен</span>
+              ) : (
+                <span className="text-muted-foreground">Офлайн</span>
+              )}
+            </p>
           </div>
         </Link>
       </div>

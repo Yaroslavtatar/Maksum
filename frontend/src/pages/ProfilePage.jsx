@@ -4,10 +4,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Button } from '../components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Avatar, AvatarFallback, AvatarImage } from '../components/ui/avatar';
-import { Badge } from '../components/ui/badge';
 import { useUser } from '../context/UserContext';
 import PostCard from '../components/Feed/PostCard';
 import EditProfileModal from '../components/Profile/EditProfileModal';
+import StatusBadge from '../components/Profile/StatusBadge';
 import { 
   MapPin, 
   Calendar, 
@@ -125,9 +125,7 @@ const ProfilePage = () => {
               <div className="flex-1">
                 <div className="flex items-center space-x-3 mb-2">
                   <h1 className="text-2xl font-bold">{user?.username || 'Профиль'}</h1>
-                  <Badge variant="outline" className="text-green-600 border-green-600">
-                    В сети
-                  </Badge>
+                  <StatusBadge status={user?.status} />
                 </div>
                 <p className="text-muted-foreground mb-4">{user?.email}</p>
 

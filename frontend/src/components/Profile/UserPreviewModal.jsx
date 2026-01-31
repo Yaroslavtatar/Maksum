@@ -4,6 +4,7 @@ import { Dialog, DialogContent } from '../ui/dialog';
 import { Button } from '../ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
 import api from '../../api/axios';
+import StatusBadge from './StatusBadge';
 import {
   Phone,
   Calendar,
@@ -77,6 +78,7 @@ const UserPreviewModal = ({ userId, open, onClose }) => {
               </Avatar>
               <div className="mt-3 flex items-center gap-2 flex-wrap">
                 <h2 className="text-xl font-bold text-foreground">{user.username}</h2>
+                <StatusBadge status={user.status} className="text-xs" />
               </div>
 
               <div className="mt-5 space-y-4 text-sm">
