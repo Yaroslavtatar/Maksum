@@ -111,25 +111,17 @@ export const UserProvider = ({ children }) => {
     }
   }, []);
 
-  // Лайк поста
+  // Лайк поста (id поста — число или строка, сравниваем по значению)
   const likePost = useCallback(async (postId) => {
+    const id = Number(postId);
+    if (!Number.isInteger(id)) return;
     try {
-      const response = await api.post(`/posts/${postId}/like`);
-      // Обновляем пост в списке
-      setPosts((prev) =>
-        prev.map((post) =>
-          post.id === postId
-            ? { ...post, liked: response.data.liked, likes: response.data.likes }
-            : post
-        )
-      );
-      setFeedPosts((prev) =>
-        prev.map((post) =>
-          post.id === postId
-            ? { ...post, liked: response.data.liked, likes: response.data.likes }
-            : post
-        )
-      );
+      const response = await api.post(`/posts/${id}/like`);
+      const { liked, likes } = response.data;
+      const upd = (post) =>
+        Number(post.id) === id ? { ...post, liked, likes } : post;
+      setPosts((prev) => prev.map(upd));
+      setFeedPosts((prev) => prev.map(upd));
       return response.data;
     } catch (error) {
       console.error('Error liking post:', error);

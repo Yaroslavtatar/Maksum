@@ -28,6 +28,7 @@ const PostCard = ({ post, onLike, onAuthorClick, onCommentAdded }) => {
   const [commentText, setCommentText] = useState('');
   const [commentsLoading, setCommentsLoading] = useState(false);
   const [sendingComment, setSendingComment] = useState(false);
+  const [liking, setLiking] = useState(false);
 
   useEffect(() => {
     if (!showComments || !post?.id) return;
@@ -155,11 +156,21 @@ const PostCard = ({ post, onLike, onAuthorClick, onCommentAdded }) => {
           <Button 
             variant="ghost" 
             size="sm" 
-            onClick={onLike}
+            disabled={liking}
+            onClick={async () => {
+              if (!onLike || liking) return;
+              setLiking(true);
+              try {
+                await onLike();
+              } catch (_) { /* ошибка уже залогирована в контексте */ }
+              finally {
+                setLiking(false);
+              }
+            }}
             className={`flex items-center space-x-2 ${post.liked ? 'text-red-500' : 'text-gray-600'} hover:text-red-500`}
           >
             <Heart className={`w-4 h-4 ${post.liked ? 'fill-current' : ''}`} />
-            <span>Нравится</span>
+            <span>{liking ? '...' : 'Нравится'}</span>
           </Button>
           
           <Button 

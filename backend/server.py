@@ -1240,7 +1240,7 @@ async def get_my_posts(user_id: int = Depends(get_current_user_id)):
 
 @api_router.get("/feed")
 async def get_feed(user_id: int = Depends(get_current_user_id)):
-    """Получить ленту новостей (посты друзей и свои)"""
+    """Лента: все посты по времени. Рекомендации по лайкам/тегам — отдельно /recommendations/posts"""
     db_type = get_db_type()
     
     async with get_db() as conn:
@@ -1252,14 +1252,8 @@ async def get_feed(user_id: int = Depends(get_current_user_id)):
                        EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = $1) as liked
                 FROM posts p
                 JOIN users u ON u.id = p.author_id
-                WHERE p.author_id = $1
-                   OR p.author_id IN (
-                       SELECT CASE WHEN f.requester_id = $1 THEN f.addressee_id ELSE f.requester_id END
-                       FROM friendships f
-                       WHERE (f.requester_id = $1 OR f.addressee_id = $1) AND f.status = 'accepted'
-                   )
                 ORDER BY p.created_at DESC
-                LIMIT 50
+                LIMIT 200
                 """,
                 user_id
             )
@@ -1272,16 +1266,10 @@ async def get_feed(user_id: int = Depends(get_current_user_id)):
                        EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = ?) as liked
                 FROM posts p
                 JOIN users u ON u.id = p.author_id
-                WHERE p.author_id = ?
-                   OR p.author_id IN (
-                       SELECT CASE WHEN f.requester_id = ? THEN f.addressee_id ELSE f.requester_id END
-                       FROM friendships f
-                       WHERE (f.requester_id = ? OR f.addressee_id = ?) AND f.status = 'accepted'
-                   )
                 ORDER BY p.created_at DESC
-                LIMIT 50
+                LIMIT 200
                 """,
-                (user_id, user_id, user_id, user_id, user_id)
+                (user_id,)
             ) as cursor:
                 rows_data = await cursor.fetchall()
                 rows = [
@@ -1316,8 +1304,19 @@ async def get_feed(user_id: int = Depends(get_current_user_id)):
 async def like_post(post_id: int, user_id: int = Depends(get_current_user_id)):
     """Поставить/убрать лайк посту"""
     db_type = get_db_type()
-    
+    liked = False
+    likes = 0
+
     async with get_db() as conn:
+        # Проверяем, что пост существует
+        if db_type == 'postgresql':
+            post_exists = await conn.fetchval("SELECT id FROM posts WHERE id = $1", post_id)
+        else:
+            async with conn.execute("SELECT id FROM posts WHERE id = ?", (post_id,)) as cur:
+                post_exists = await cur.fetchone()
+        if not post_exists:
+            raise HTTPException(status_code=404, detail="Post not found")
+
         # Проверяем, есть ли уже лайк
         if db_type == 'postgresql':
             existing = await conn.fetchval(
