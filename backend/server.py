@@ -277,9 +277,9 @@ async def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depend
             row = await conn.fetchrow("SELECT id FROM users WHERE id = $1", user_id)
         else:
             async with conn.execute("SELECT id FROM users WHERE id = ?", (user_id,)) as cursor:
-            row = await cursor.fetchone()
-            if not row:
-                raise HTTPException(status_code=401, detail="User not found")
+                row = await cursor.fetchone()
+                if not row:
+                    raise HTTPException(status_code=401, detail="User not found")
         # Обновляем last_seen при каждом запросе — тогда статус «В сети» реальный
         if db_type == 'postgresql':
             await conn.execute("UPDATE users SET last_seen = NOW() WHERE id = $1", user_id)
