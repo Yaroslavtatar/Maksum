@@ -80,7 +80,7 @@ const SettingsPage = () => {
   useEffect(() => {
     (async () => {
       try {
-        const res = await axios.get('/api/users/me');
+        const res = await axios.get('/users/me');
         setSettings((prev) => ({
           ...prev,
           username: res.data.username || '',
@@ -102,7 +102,7 @@ const SettingsPage = () => {
         email: settings.email,
         avatar_url: settings.avatar_url,
       };
-      const res = await axios.put('/api/users/me', payload);
+      const res = await axios.put('/users/me', payload);
       setSettings((prev) => ({ ...prev, ...res.data }));
       alert('Настройки сохранены');
     } catch (e) {

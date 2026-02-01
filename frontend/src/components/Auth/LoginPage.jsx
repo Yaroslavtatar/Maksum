@@ -42,7 +42,7 @@ const LoginPage = () => {
     setLoading(true);
 
     try {
-      const response = await axios.post(`${API}/auth/login`, {
+      const response = await axios.post('/auth/login', {
         username_or_email: loginData.email,
         password: loginData.password,
       });
@@ -94,7 +94,7 @@ const LoginPage = () => {
     setLoading(true);
 
     try {
-      const registerResponse = await axios.post(`${API}/auth/register`, {
+      const registerResponse = await axios.post('/auth/register', {
         username: registerData.username.trim(),
         email: registerData.email.trim().toLowerCase(),
         password: registerData.password,
@@ -106,7 +106,7 @@ const LoginPage = () => {
         // Автоматический вход после регистрации
         setTimeout(async () => {
           try {
-            const loginResponse = await axios.post(`${API}/auth/login`, {
+            const loginResponse = await axios.post('/auth/login', {
               username_or_email: registerData.email,
               password: registerData.password,
             });

@@ -41,7 +41,7 @@ function App() {
 
   const helloWorldApi = async () => {
     try {
-      const response = await axios.get(`${API}/`);
+      const response = await axios.get('/');
       console.log(response.data.message);
     } catch (e) {
       console.error(e, `errored out requesting / api`);
