@@ -381,12 +381,15 @@ async def login_user(data: LoginInput):
     db_type = get_db_type()
     async with get_db() as conn:
         if db_type == 'postgresql':
-            user = await conn.fetchrow(
+            row = await conn.fetchrow(
                 "SELECT id, password_hash, is_banned FROM users WHERE username = $1 OR email = $1",
                 data.username_or_email
             )
-            if user:
-                user = dict(user)
+            if not row:
+                raise HTTPException(status_code=401, detail="Invalid credentials")
+            user = dict(row)
+            if not verify_password(data.password, user["password_hash"]):
+                raise HTTPException(status_code=401, detail="Invalid credentials")
         else:
             async with conn.execute(
                 "SELECT id, password_hash, is_banned FROM users WHERE username = ? OR email = ?",
@@ -401,8 +404,8 @@ async def login_user(data: LoginInput):
                 raise HTTPException(status_code=401, detail="Invalid credentials")
         if user.get("is_banned"):
             raise HTTPException(status_code=403, detail="Account is banned")
-            token = create_access_token({"sub": str(user["id"])})
-            return TokenResponse(access_token=token)
+        token = create_access_token({"sub": str(user["id"])})
+        return TokenResponse(access_token=token)
 
 # ===================== Users API =====================
 @api_router.get("/users/me")
