@@ -1,11 +1,12 @@
 import axios from 'axios';
 
-// Только localhost:8001, никуда больше
-const BACKEND_URL = 'http://127.0.0.1:8001';
+// Относительный /api — запросы идут на тот же хост (IP:3000), dev-сервер проксирует на 127.0.0.1:8001
+const BACKEND_URL = '';
+const API_BASE = BACKEND_URL ? `${BACKEND_URL}/api` : '/api';
 
 // Создаём глобальный axios instance
 const api = axios.create({
-  baseURL: `${BACKEND_URL}/api`,
+  baseURL: API_BASE,
   headers: {
     'Content-Type': 'application/json',
   },

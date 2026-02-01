@@ -21,8 +21,8 @@ import UsersPage from "./pages/UsersPage";
 import MediaPage from "./pages/MediaPage";
 import CryAdminPage from "./pages/CryAdminPage";
 
-const BACKEND_URL = 'http://127.0.0.1:8001';
-const API = `${BACKEND_URL}/api`;
+const BACKEND_URL = '';
+const API = BACKEND_URL ? `${BACKEND_URL}/api` : '/api';
 
 // Protected Route Component
 const ProtectedRoute = ({ children }) => {

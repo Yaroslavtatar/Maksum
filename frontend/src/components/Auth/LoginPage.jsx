@@ -9,8 +9,8 @@ import { Eye, EyeOff, Sun, Moon, Mail, Lock, User, AlertCircle, CheckCircle2 } f
 import axios from 'axios';
 import { useTheme } from '../../hooks/useTheme';
 
-const BACKEND_URL = 'http://127.0.0.1:8001';
-const API = `${BACKEND_URL}/api`;
+const BACKEND_URL = '';
+const API = BACKEND_URL ? `${BACKEND_URL}/api` : '/api';
 
 const LoginPage = () => {
   const [showPassword, setShowPassword] = useState(false);

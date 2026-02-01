@@ -2,8 +2,8 @@ import { useState, useEffect, createContext, useContext } from 'react';
 
 const ThemeContext = createContext();
 
-const BACKEND_URL = 'http://127.0.0.1:8001';
-const API_URL = `${BACKEND_URL}/api`;
+const BACKEND_URL = '';
+const API_URL = BACKEND_URL ? `${BACKEND_URL}/api` : '/api';
 
 // Применение темы к документу
 const applyTheme = (theme) => {
