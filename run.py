@@ -72,7 +72,7 @@ def start_frontend() -> subprocess.Popen:
     env["PORT"] = FRONTEND_PORT
     env["BROWSER"] = "none"  # не открывать браузер автоматически
     # Фронт обращается только на localhost:8001
-    env["REACT_APP_BACKEND_URL"] = f"http://{BACKEND_HOST}:{BACKEND_PORT}"
+    env["REACT_APP_BACKEND_URL"] = "http://127.0.0.1:8001"
 
     use_yarn = os.path.isfile(os.path.join(FRONTEND_DIR, "yarn.lock"))
     if use_yarn:

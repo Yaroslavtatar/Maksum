@@ -277,9 +277,9 @@ async def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depend
             row = await conn.fetchrow("SELECT id FROM users WHERE id = $1", user_id)
         else:
             async with conn.execute("SELECT id FROM users WHERE id = ?", (user_id,)) as cursor:
-                row = await cursor.fetchone()
-        if not row:
-            raise HTTPException(status_code=401, detail="User not found")
+            row = await cursor.fetchone()
+            if not row:
+                raise HTTPException(status_code=401, detail="User not found")
         # Обновляем last_seen при каждом запросе — тогда статус «В сети» реальный
         if db_type == 'postgresql':
             await conn.execute("UPDATE users SET last_seen = NOW() WHERE id = $1", user_id)
@@ -354,10 +354,10 @@ async def register_user(data: RegisterInput):
                 "SELECT id FROM users WHERE username = ? OR email = ?",
                 (data.username, data.email)
             ) as cursor:
-                exists = await cursor.fetchone()
-        if exists:
-            raise HTTPException(status_code=400, detail="Username or email already in use")
-        pw_hash = hash_password(data.password)
+            exists = await cursor.fetchone()
+            if exists:
+                raise HTTPException(status_code=400, detail="Username or email already in use")
+            pw_hash = hash_password(data.password)
         if db_type == 'postgresql':
             user_id = await conn.fetchval(
                 "INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id",
@@ -873,10 +873,10 @@ async def get_my_avatar(user_id: int = Depends(get_current_user_id)):
             avatar_url = await conn.fetchval("SELECT avatar_url FROM users WHERE id = $1", user_id)
         else:  # sqlite
             async with conn.execute("SELECT avatar_url FROM users WHERE id = ?", (user_id,)) as cursor:
-                row = await cursor.fetchone()
+            row = await cursor.fetchone()
             avatar_url = row[0] if row else None
-        if avatar_url:
-            return RedirectResponse(url=avatar_url)
+            if avatar_url:
+                return RedirectResponse(url=avatar_url)
 
     # SVG силуэт человека на сером фоне 128x128
     svg = (
@@ -951,7 +951,7 @@ async def send_friend_request(data: FriendAction, user_id: int = Depends(get_cur
         raise HTTPException(status_code=400, detail="Cannot friend yourself")
     db_type = get_db_type()
     async with get_db() as conn:
-        # Avoid duplicates and normalize requester/addressee pair
+            # Avoid duplicates and normalize requester/addressee pair
         if db_type == 'postgresql':
             row = await conn.fetchrow(
                 """
@@ -1004,8 +1004,8 @@ async def send_friend_request(data: FriendAction, user_id: int = Depends(get_cur
             notif_type="friend_request",
             actor_id=user_id,
             content="отправил(а) вам заявку в друзья"
-        )
-        return {"status": "pending"}
+            )
+            return {"status": "pending"}
 
 @api_router.post("/friends/accept")
 async def accept_friend_request(data: FriendAction, user_id: int = Depends(get_current_user_id)):
@@ -1034,7 +1034,7 @@ async def accept_friend_request(data: FriendAction, user_id: int = Depends(get_c
             actor_id=user_id,
             content="принял(а) вашу заявку в друзья"
         )
-        return {"status": "accepted"}
+            return {"status": "accepted"}
 
 @api_router.post("/friends/remove")
 async def remove_friend(data: FriendAction, user_id: int = Depends(get_current_user_id)):
@@ -1860,7 +1860,7 @@ async def list_conversations(user_id: int = Depends(get_current_user_id)):
 async def get_messages(conversation_id: int, user_id: int = Depends(get_current_user_id)):
     db_type = get_db_type()
     async with get_db() as conn:
-        # Ensure membership
+            # Ensure membership
         if db_type == 'postgresql':
             member = await conn.fetchval(
                 "SELECT 1 FROM conversation_participants WHERE conversation_id=$1 AND user_id=$2",
@@ -1874,7 +1874,7 @@ async def get_messages(conversation_id: int, user_id: int = Depends(get_current_
                 member = await cursor.fetchone()
         
         if not member:
-            raise HTTPException(status_code=403, detail="Not a participant")
+                raise HTTPException(status_code=403, detail="Not a participant")
         
         if db_type == 'postgresql':
             rows = await conn.fetch(
@@ -1905,13 +1905,13 @@ async def send_message(data: MessageSend, user_id: int = Depends(get_current_use
         raise HTTPException(status_code=400, detail="Invalid payload")
     db_type = get_db_type()
     async with get_db() as conn:
-        conversation_id = data.conversation_id
-        # Create conversation with direct user if needed
-        if conversation_id is None:
-            to_user = data.to_user_id
-            if to_user == user_id:
-                raise HTTPException(status_code=400, detail="Cannot message yourself")
-            # Try find existing two-user conversation
+            conversation_id = data.conversation_id
+            # Create conversation with direct user if needed
+            if conversation_id is None:
+                to_user = data.to_user_id
+                if to_user == user_id:
+                    raise HTTPException(status_code=400, detail="Cannot message yourself")
+                # Try find existing two-user conversation
             if db_type == 'postgresql':
                 row = await conn.fetchrow(
                     """
@@ -1941,7 +1941,7 @@ async def send_message(data: MessageSend, user_id: int = Depends(get_current_use
                     """,
                     (user_id, to_user)
                 ) as cursor:
-                    row = await cursor.fetchone()
+                row = await cursor.fetchone()
                 if row:
                     conversation_id = row[0]
                 else:
@@ -1953,7 +1953,7 @@ async def send_message(data: MessageSend, user_id: int = Depends(get_current_use
                     await conn.execute("INSERT INTO conversation_participants (conversation_id, user_id) VALUES (?, ?)", (conversation_id, to_user))
                     await conn.commit()
 
-        # Ensure sender is participant
+            # Ensure sender is participant
         if db_type == 'postgresql':
             member = await conn.fetchval(
                 "SELECT 1 FROM conversation_participants WHERE conversation_id=$1 AND user_id=$2",
@@ -1967,7 +1967,7 @@ async def send_message(data: MessageSend, user_id: int = Depends(get_current_use
                 member = await cursor.fetchone()
         
         if not member:
-            raise HTTPException(status_code=403, detail="Not a participant")
+                raise HTTPException(status_code=403, detail="Not a participant")
 
         if db_type == 'postgresql':
             await conn.execute(

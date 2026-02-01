@@ -9,7 +9,7 @@ import { Eye, EyeOff, Sun, Moon, Mail, Lock, User, AlertCircle, CheckCircle2 } f
 import axios from 'axios';
 import { useTheme } from '../../hooks/useTheme';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://127.0.0.1:8001';
+const BACKEND_URL = 'http://127.0.0.1:8001';
 const API = `${BACKEND_URL}/api`;
 
 const LoginPage = () => {
