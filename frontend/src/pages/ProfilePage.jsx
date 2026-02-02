@@ -26,12 +26,23 @@ import {
 const ProfilePage = () => {
   const [activeTab, setActiveTab] = useState('posts');
   const [editModalOpen, setEditModalOpen] = useState(false);
-  const { user, loading, posts, friends, fetchMyPosts, fetchFriends, likePost, fetchUser } = useUser();
+  const { user, loading, posts, friends, fetchMyPosts, fetchFriends, likePost, fetchUser, setPauseProfileRefresh } = useUser();
 
   useEffect(() => {
     fetchMyPosts();
     fetchFriends();
   }, [fetchMyPosts, fetchFriends]);
+
+  // При открытии страницы профиля подтягиваем свежие данные (профиль и статус «В сети»)
+  useEffect(() => {
+    fetchUser();
+  }, [fetchUser]);
+
+  // Пока открыто окно редактирования — не обновлять профиль по таймеру/visibility, чтобы не сбрасывать форму
+  useEffect(() => {
+    setPauseProfileRefresh(editModalOpen);
+    return () => setPauseProfileRefresh(false);
+  }, [editModalOpen, setPauseProfileRefresh]);
 
   const handleProfileUpdate = async (updatedData) => {
     // Данные уже обновлены в контексте через updateProfile

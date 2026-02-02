@@ -33,7 +33,8 @@ api_router = APIRouter(prefix="/api")
 security = HTTPBearer()
 JWT_SECRET = os.getenv("JWT_SECRET", "dev_secret_change_me")
 JWT_ALG = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
+# 30 дней по умолчанию — при перезаходе в браузер пользователь остаётся в аккаунте
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "43200"))
 
 # Define Models
 class StatusCheck(BaseModel):
@@ -441,17 +442,37 @@ async def login_user(request: Request, data: LoginInput):
             raise HTTPException(status_code=403, detail="Account is banned")
         token = create_access_token({"sub": str(user["id"])})
         device_id = None
-        if data.device_name and data.device_name.strip():
-            name = (data.device_name.strip() or "Устройство")[:255]
-            if db_type == 'postgresql':
+        name = (data.device_name and data.device_name.strip())[:255] if data.device_name else (user_agent[:255] if user_agent else "Устройство")
+        if not name:
+            name = "Устройство"
+        ua_stored = (user_agent[:1024] if user_agent else "") or ""
+        if db_type == 'postgresql':
+            existing = await conn.fetchrow(
+                "SELECT id FROM user_devices WHERE user_id = $1 AND COALESCE(user_agent, '') = $2 ORDER BY last_used_at DESC LIMIT 1",
+                user["id"], ua_stored
+            )
+            if existing:
+                device_id = existing["id"]
+                await conn.execute("UPDATE user_devices SET last_used_at = NOW(), name = $1 WHERE id = $2", name, device_id)
+            else:
                 device_id = await conn.fetchval(
                     "INSERT INTO user_devices (user_id, name, user_agent) VALUES ($1, $2, $3) RETURNING id",
-                    user["id"], name, user_agent[:1024] if user_agent else None
+                    user["id"], name, ua_stored if ua_stored else None
                 )
+        else:
+            async with conn.execute(
+                "SELECT id FROM user_devices WHERE user_id = ? AND COALESCE(user_agent, '') = ? ORDER BY last_used_at DESC LIMIT 1",
+                (user["id"], ua_stored)
+            ) as cur:
+                row = await cur.fetchone()
+            if row:
+                device_id = row[0]
+                await conn.execute("UPDATE user_devices SET last_used_at = datetime('now'), name = ? WHERE id = ?", (name, device_id))
+                await conn.commit()
             else:
                 cursor = await conn.execute(
                     "INSERT INTO user_devices (user_id, name, user_agent) VALUES (?, ?, ?)",
-                    (user["id"], name, user_agent[:1024] if user_agent else None)
+                    (user["id"], name, ua_stored if ua_stored else None)
                 )
                 await conn.commit()
                 device_id = cursor.lastrowid
@@ -541,6 +562,50 @@ async def ping_activity(user_id: int = Depends(get_current_user_id)):
 
 
 # ===================== Устройства безопасности =====================
+@api_router.post("/users/me/devices/register")
+async def register_current_device(
+    request: Request,
+    user_id: int = Depends(get_current_user_id),
+):
+    """Зарегистрировать текущее устройство (если уже залогинен, но device_id нет — чтобы устройство появилось во вкладке «Устройства»)."""
+    user_agent = request.headers.get("user-agent") or ""
+    ua_stored = (user_agent[:1024] if user_agent else "") or ""
+    name = (user_agent[:255] if user_agent else "Устройство") or "Устройство"
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            existing = await conn.fetchrow(
+                "SELECT id FROM user_devices WHERE user_id = $1 AND COALESCE(user_agent, '') = $2 ORDER BY last_used_at DESC LIMIT 1",
+                user_id, ua_stored
+            )
+            if existing:
+                device_id = existing["id"]
+                await conn.execute("UPDATE user_devices SET last_used_at = NOW(), name = $1 WHERE id = $2", name, device_id)
+            else:
+                device_id = await conn.fetchval(
+                    "INSERT INTO user_devices (user_id, name, user_agent) VALUES ($1, $2, $3) RETURNING id",
+                    user_id, name, ua_stored if ua_stored else None
+                )
+        else:
+            async with conn.execute(
+                "SELECT id FROM user_devices WHERE user_id = ? AND COALESCE(user_agent, '') = ? ORDER BY last_used_at DESC LIMIT 1",
+                (user_id, ua_stored)
+            ) as cur:
+                row = await cur.fetchone()
+            if row:
+                device_id = row[0]
+                await conn.execute("UPDATE user_devices SET last_used_at = datetime('now'), name = ? WHERE id = ?", (name, device_id))
+                await conn.commit()
+            else:
+                cursor = await conn.execute(
+                    "INSERT INTO user_devices (user_id, name, user_agent) VALUES (?, ?, ?)",
+                    (user_id, name, ua_stored if ua_stored else None)
+                )
+                await conn.commit()
+                device_id = cursor.lastrowid
+    return {"device_id": device_id}
+
+
 @api_router.get("/users/me/devices", response_model=List[DeviceInfo])
 async def list_my_devices(user_id: int = Depends(get_current_user_id)):
     """Список устройств, с которых выполнялся вход (для отзыва сессий)."""

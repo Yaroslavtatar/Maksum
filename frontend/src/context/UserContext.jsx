@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import api from '../api/axios';
 
 const UserContext = createContext(null);
@@ -17,6 +17,11 @@ export const UserProvider = ({ children }) => {
   const [friends, setFriends] = useState([]);
   const [posts, setPosts] = useState([]);
   const [feedPosts, setFeedPosts] = useState([]);
+  /** Пока true — периодическое и по visibility обновление профиля не вызывают fetchUser (чтобы не сбрасывать форму редактирования). */
+  const pauseProfileRefreshRef = useRef(false);
+  const setPauseProfileRefresh = useCallback((pause) => {
+    pauseProfileRefreshRef.current = !!pause;
+  }, []);
 
   // Загрузка данных текущего пользователя
   const fetchUser = useCallback(async () => {
@@ -30,14 +35,22 @@ export const UserProvider = ({ children }) => {
     try {
       const response = await api.get('/users/me');
       setUser(response.data);
-      // Сохраняем в localStorage для быстрого доступа
       localStorage.setItem('maksum-user', JSON.stringify(response.data));
+      // Если устройство ещё не зарегистрировано — регистрируем, чтобы оно отображалось во вкладке «Устройства»
+      if (!localStorage.getItem('device_id')) {
+        try {
+          const devRes = await api.post('/users/me/devices/register');
+          if (devRes.data?.device_id != null) {
+            localStorage.setItem('device_id', String(devRes.data.device_id));
+          }
+        } catch (_) {}
+      }
       return response.data;
     } catch (error) {
       console.error('Error fetching user:', error);
-      // Если ошибка авторизации, очищаем localStorage
       if (error.response?.status === 401) {
         localStorage.removeItem('token');
+        localStorage.removeItem('device_id');
         localStorage.removeItem('maksum-user');
       }
       setUser(null);
@@ -86,17 +99,17 @@ export const UserProvider = ({ children }) => {
     }
   }, []);
 
-  // Обновление профиля
+  // Обновление профиля — после PUT подтягиваем полные данные (status, last_seen, phone и т.д.)
   const updateProfile = useCallback(async (data) => {
     try {
-      const response = await api.put('/users/me', data);
-      setUser(response.data);
-      return response.data;
+      await api.put('/users/me', data);
+      const fresh = await fetchUser();
+      return fresh;
     } catch (error) {
       console.error('Error updating profile:', error);
       throw error;
     }
-  }, []);
+  }, [fetchUser]);
 
   // Создание поста
   const createPost = useCallback(async (content, images = []) => {
@@ -189,14 +202,29 @@ export const UserProvider = ({ children }) => {
     };
   }, [fetchUser]);
 
-  // Пинг активности для статуса «В сети» (обновление last_seen каждые 60 сек)
+  // Пинг и периодическое обновление профиля — статус «В сети» обновляется без перезагрузки страницы
+  // Не обновляем профиль, пока открыто окно редактирования (чтобы не сбрасывать ввод)
   useEffect(() => {
     if (!user) return;
     const ping = () => api.post('/users/me/ping').catch(() => {});
     ping();
-    const id = setInterval(ping, 60000);
-    return () => clearInterval(id);
-  }, [user]);
+    const pingId = setInterval(ping, 60000);
+    const refreshUser = () => {
+      if (pauseProfileRefreshRef.current) return;
+      fetchUser().catch(() => {});
+    };
+    refreshUser();
+    const refreshId = setInterval(refreshUser, 25000);
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible' && !pauseProfileRefreshRef.current) refreshUser();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      clearInterval(pingId);
+      clearInterval(refreshId);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [user, fetchUser]);
 
   const value = {
     user,
@@ -209,6 +237,7 @@ export const UserProvider = ({ children }) => {
     fetchMyPosts,
     fetchFeed,
     updateProfile,
+    setPauseProfileRefresh,
     createPost,
     likePost,
     sendFriendRequest,

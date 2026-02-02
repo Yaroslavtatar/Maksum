@@ -440,6 +440,14 @@ async def init_db():
                 )
                 await conn.execute("INSERT INTO applied_migrations (name) VALUES ($1)", "reset_admins_durov_ilya")
                 logger.info("Миграция reset_admins_durov_ilya применена: админы только durov, илья_новиков_65vsj")
+
+            # Одноразовая миграция: avatar_url и cover_photo — TEXT (base64/длинные URL не влезают в VARCHAR(1024))
+            done2 = await conn.fetchval("SELECT 1 FROM applied_migrations WHERE name = $1", "avatar_cover_to_text")
+            if done2 is None:
+                await conn.execute("ALTER TABLE users ALTER COLUMN avatar_url TYPE TEXT")
+                await conn.execute("ALTER TABLE users ALTER COLUMN cover_photo TYPE TEXT")
+                await conn.execute("INSERT INTO applied_migrations (name) VALUES ($1)", "avatar_cover_to_text")
+                logger.info("Миграция avatar_cover_to_text применена: avatar_url, cover_photo — TEXT")
             
         else:  # SQLite
             # SQLite таблицы

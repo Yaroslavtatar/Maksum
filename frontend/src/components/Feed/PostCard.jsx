@@ -72,7 +72,7 @@ const PostCard = ({ post, onLike, onAuthorClick, onCommentAdded }) => {
       </Avatar>
       <div>
         <p className={`font-medium text-sm ${onAuthorClick && authorId ? 'cursor-pointer hover:text-primary' : ''}`}>{authorName}</p>
-        <p className="text-xs text-gray-500">{timestamp}</p>
+        <p className="text-xs text-muted-foreground">{timestamp}</p>
       </div>
     </div>
   );
@@ -115,7 +115,7 @@ const PostCard = ({ post, onLike, onAuthorClick, onCommentAdded }) => {
       <CardContent className="pt-0">
         {/* Post Content */}
         <div className="mb-4">
-          <p className="text-gray-900 leading-relaxed">{post.content}</p>
+          <p className="text-foreground leading-relaxed">{post.content}</p>
         </div>
 
         {/* Post Images */}
@@ -143,7 +143,7 @@ const PostCard = ({ post, onLike, onAuthorClick, onCommentAdded }) => {
         )}
 
         {/* Post Stats */}
-        <div className="flex items-center justify-between text-sm text-gray-500 mb-3">
+        <div className="flex items-center justify-between text-sm text-muted-foreground mb-3">
           <div className="flex items-center space-x-4">
             <span>{post.likes || 0} нравится</span>
             <span>{post.comments || 0} комментариев</span>
@@ -167,7 +167,7 @@ const PostCard = ({ post, onLike, onAuthorClick, onCommentAdded }) => {
                 setLiking(false);
               }
             }}
-            className={`flex items-center space-x-2 ${post.liked ? 'text-red-500' : 'text-gray-600'} hover:text-red-500`}
+            className={`flex items-center space-x-2 ${post.liked ? 'text-red-500' : 'text-muted-foreground'} hover:text-red-500`}
           >
             <Heart className={`w-4 h-4 ${post.liked ? 'fill-current' : ''}`} />
             <span>{liking ? '...' : 'Нравится'}</span>
@@ -177,7 +177,7 @@ const PostCard = ({ post, onLike, onAuthorClick, onCommentAdded }) => {
             variant="ghost" 
             size="sm" 
             onClick={() => setShowComments(!showComments)}
-            className="flex items-center space-x-2 text-gray-600 hover:text-blue-500"
+            className="flex items-center space-x-2 text-muted-foreground hover:text-blue-500"
           >
             <MessageCircle className="w-4 h-4" />
             <span>Комментировать</span>
@@ -186,7 +186,7 @@ const PostCard = ({ post, onLike, onAuthorClick, onCommentAdded }) => {
           <Button 
             variant="ghost" 
             size="sm" 
-            className="flex items-center space-x-2 text-gray-600 hover:text-green-500"
+            className="flex items-center space-x-2 text-muted-foreground hover:text-green-500"
           >
             <Share className="w-4 h-4" />
             <span>Поделиться</span>

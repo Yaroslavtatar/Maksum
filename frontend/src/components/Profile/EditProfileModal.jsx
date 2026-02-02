@@ -7,6 +7,47 @@ import { Textarea } from '../ui/textarea';
 import { Camera, X, Loader2 } from 'lucide-react';
 import { useUser } from '../../context/UserContext';
 
+/** Оставить только цифры из строки телефона (и ведущий + не сохраняем в цифрах) */
+function getPhoneDigits(value) {
+  if (!value || typeof value !== 'string') return '';
+  return value.replace(/\D/g, '');
+}
+
+/** Форматирование телефона при вводе: +7 999 123 45 67 (РФ) или +X XXX XXX XX XX */
+function formatPhoneInput(value) {
+  const digits = getPhoneDigits(value);
+  if (digits.length === 0) return '';
+  if (digits.startsWith('8')) {
+    const rest = digits.slice(1).slice(0, 10);
+    if (rest.length <= 3) return '+7 ' + rest;
+    if (rest.length <= 6) return '+7 ' + rest.slice(0, 3) + ' ' + rest.slice(3);
+    if (rest.length <= 8) return '+7 ' + rest.slice(0, 3) + ' ' + rest.slice(3, 6) + ' ' + rest.slice(6);
+    return '+7 ' + rest.slice(0, 3) + ' ' + rest.slice(3, 6) + ' ' + rest.slice(6, 8) + ' ' + rest.slice(8, 10);
+  }
+  if (digits.startsWith('7')) {
+    const rest = digits.slice(1).slice(0, 10);
+    if (rest.length <= 3) return '+7 ' + rest;
+    if (rest.length <= 6) return '+7 ' + rest.slice(0, 3) + ' ' + rest.slice(3);
+    if (rest.length <= 8) return '+7 ' + rest.slice(0, 3) + ' ' + rest.slice(3, 6) + ' ' + rest.slice(6);
+    return '+7 ' + rest.slice(0, 3) + ' ' + rest.slice(3, 6) + ' ' + rest.slice(6, 8) + ' ' + rest.slice(8, 10);
+  }
+  const rest = digits.slice(0, 15);
+  return '+' + rest.replace(/(\d{1,3})(?=\d)/g, (m, g) => g + ' ').trim();
+}
+
+/** Проверка: похож ли номер на реальный (не набор цифр подряд, не одни единицы и т.д.) */
+function isPhoneLikelyValid(phoneValue) {
+  const digits = getPhoneDigits(phoneValue);
+  if (digits.length < 10) return false;
+  if (digits.length > 15) return false;
+  const d = digits;
+  if (/^(\d)\1+$/.test(d)) return false;
+  if (/^1234567890$/.test(d) || /^0987654321$/.test(d)) return false;
+  if (/^0123456789$/.test(d) || /^9876543210$/.test(d)) return false;
+  if (d.length >= 10 && /^(\d)\1{9,}$/.test(d)) return false;
+  return true;
+}
+
 const EditProfileModal = ({ open, onClose, user, onUpdate }) => {
   const { updateProfile } = useUser();
   const [formData, setFormData] = useState({
@@ -25,28 +66,35 @@ const EditProfileModal = ({ open, onClose, user, onUpdate }) => {
   const [coverPreview, setCoverPreview] = useState(user?.cover_photo || '');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [phoneError, setPhoneError] = useState('');
   const avatarInputRef = useRef(null);
   const coverInputRef = useRef(null);
+  const wasOpenRef = useRef(false);
 
-  // Обновляем форму при изменении user
+  // Подставляем данные в форму только при открытии модалки; пока редактируешь — не перезаписываем ввод
   useEffect(() => {
-    if (user) {
-      setFormData({
-        username: user.username || '',
-        email: user.email || '',
-        bio: user.bio || '',
-        location: user.location || '',
-        birth_date: user.birth_date || '',
-        phone: user.phone || '',
-        work_hours: user.work_hours || '',
-        profile_accent: user.profile_accent || 'blue',
-        community_name: user.community_name || '',
-        community_description: user.community_description || '',
-      });
-      setAvatarPreview(user.avatar_url || '');
-      setCoverPreview(user.cover_photo || '');
+    if (open && user) {
+      if (!wasOpenRef.current) {
+        wasOpenRef.current = true;
+        setFormData({
+          username: user.username || '',
+          email: user.email || '',
+          bio: user.bio || '',
+          location: user.location || '',
+          birth_date: user.birth_date || '',
+          phone: user.phone || '',
+          work_hours: user.work_hours || '',
+          profile_accent: user.profile_accent || 'blue',
+          community_name: user.community_name || '',
+          community_description: user.community_description || '',
+        });
+        setAvatarPreview(user.avatar_url || '');
+        setCoverPreview(user.cover_photo || '');
+      }
+    } else {
+      wasOpenRef.current = false;
     }
-  }, [user]);
+  }, [open, user]);
 
   const handleImageUpload = async (file, type) => {
     return new Promise((resolve, reject) => {
@@ -98,9 +146,23 @@ const EditProfileModal = ({ open, onClose, user, onUpdate }) => {
     e.preventDefault();
     setLoading(true);
     setError('');
+    setPhoneError('');
+
+    if (formData.phone && formData.phone.trim()) {
+      const digits = getPhoneDigits(formData.phone);
+      if (digits.length < 10) {
+        setPhoneError('В номере должно быть не менее 10 цифр');
+        setLoading(false);
+        return;
+      }
+      if (!isPhoneLikelyValid(formData.phone)) {
+        setPhoneError('Похоже на случайный набор цифр. Введите реальный номер.');
+        setLoading(false);
+        return;
+      }
+    }
 
     try {
-      // Обновляем профиль
       const updateData = { ...formData };
       if (avatarPreview && avatarPreview !== user?.avatar_url) {
         updateData.avatar_url = avatarPreview;
@@ -298,10 +360,24 @@ const EditProfileModal = ({ open, onClose, user, onUpdate }) => {
             <Label htmlFor="phone">Телефон</Label>
             <Input
               id="phone"
+              type="tel"
+              inputMode="numeric"
+              autoComplete="tel"
               value={formData.phone}
-              onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+              onChange={(e) => {
+                const formatted = formatPhoneInput(e.target.value);
+                setFormData({ ...formData, phone: formatted });
+                setPhoneError('');
+              }}
+              onBlur={() => {
+                if (formData.phone && formData.phone.trim() && !isPhoneLikelyValid(formData.phone) && getPhoneDigits(formData.phone).length >= 10) {
+                  setPhoneError('Похоже на случайный набор цифр');
+                }
+              }}
               placeholder="+7 999 123 45 67"
+              className={phoneError ? 'border-red-500' : ''}
             />
+            {phoneError && <p className="text-sm text-red-500 mt-1">{phoneError}</p>}
           </div>
 
           {/* Work Hours */}
