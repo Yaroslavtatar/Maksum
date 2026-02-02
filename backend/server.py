@@ -140,7 +140,8 @@ class FriendAction(BaseModel):
 class MessageSend(BaseModel):
     conversation_id: Optional[int] = None
     to_user_id: Optional[int] = None
-    content: str
+    content: str = ""
+    voice_base64: Optional[str] = None  # data:audio/ogg;base64,... для голосовых
 
 # Post Models
 class PostCreate(BaseModel):
@@ -1226,6 +1227,14 @@ async def send_friend_request(data: FriendAction, user_id: int = Depends(get_cur
                 user_id, data.user_id, data.user_id, user_id
             )
             row = dict(row) if row else None
+            if row:
+                if row["status"] == 'accepted':
+                    raise HTTPException(status_code=400, detail="Already friends")
+                if row["requester_id"] == user_id and row["status"] == 'pending':
+                    raise HTTPException(status_code=400, detail="Request already sent")
+                if row["addressee_id"] == user_id and row["status"] == 'pending':
+                    await conn.execute("UPDATE friendships SET status='accepted' WHERE id=$1", row["id"])
+                    return {"status": "accepted"}
         else:
             async with conn.execute(
                 """
@@ -1243,14 +1252,11 @@ async def send_friend_request(data: FriendAction, user_id: int = Depends(get_cur
                 if row["requester_id"] == user_id and row["status"] == 'pending':
                     raise HTTPException(status_code=400, detail="Request already sent")
                 if row["addressee_id"] == user_id and row["status"] == 'pending':
-                    if db_type == 'postgresql':
-                        await conn.execute("UPDATE friendships SET status='accepted' WHERE id=$1", row["id"])
-                    else:
-                        await conn.execute("UPDATE friendships SET status='accepted' WHERE id=?", (row["id"],))
-                        await conn.commit()
+                    await conn.execute("UPDATE friendships SET status='accepted' WHERE id=?", (row["id"],))
+                    await conn.commit()
                     return {"status": "accepted"}
 
-            # create new pending
+        # create new pending
         if db_type == 'postgresql':
             await conn.execute(
                 "INSERT INTO friendships (requester_id, addressee_id, status) VALUES ($1, $2, 'pending')",
@@ -2204,30 +2210,43 @@ async def get_messages(conversation_id: int, user_id: int = Depends(get_current_
         
         if db_type == 'postgresql':
             rows = await conn.fetch(
-                "SELECT id, sender_id, content, created_at FROM messages WHERE conversation_id=$1 ORDER BY created_at ASC LIMIT 500",
+                "SELECT id, sender_id, content, created_at, voice_url FROM messages WHERE conversation_id=$1 ORDER BY created_at ASC LIMIT 500",
                 conversation_id
             )
             rows = [dict(r) for r in rows]
         else:  # sqlite
-            async with conn.execute(
-                "SELECT id, sender_id, content, created_at FROM messages WHERE conversation_id=? ORDER BY created_at ASC LIMIT 500",
-                (conversation_id,)
-            ) as cursor:
-                rows_data = await cursor.fetchall()
-                rows = [
-                    {
-                        "id": r[0],
-                        "sender_id": r[1],
-                        "content": r[2],
-                        "created_at": r[3]
-                    }
-                    for r in rows_data
-                ]
+            try:
+                async with conn.execute(
+                    "SELECT id, sender_id, content, created_at, voice_url FROM messages WHERE conversation_id=? ORDER BY created_at ASC LIMIT 500",
+                    (conversation_id,)
+                ) as cursor:
+                    rows_data = await cursor.fetchall()
+                    rows = [
+                        {
+                            "id": r[0],
+                            "sender_id": r[1],
+                            "content": r[2],
+                            "created_at": r[3],
+                            "voice_url": r[4] if len(r) > 4 else None
+                        }
+                        for r in rows_data
+                    ]
+            except Exception:
+                async with conn.execute(
+                    "SELECT id, sender_id, content, created_at FROM messages WHERE conversation_id=? ORDER BY created_at ASC LIMIT 500",
+                    (conversation_id,)
+                ) as cursor:
+                    rows_data = await cursor.fetchall()
+                    rows = [
+                        {"id": r[0], "sender_id": r[1], "content": r[2], "created_at": r[3], "voice_url": None}
+                        for r in rows_data
+                    ]
         return rows
 
 @api_router.post("/messages/send")
 async def send_message(data: MessageSend, user_id: int = Depends(get_current_user_id)):
-    if not data.content or (not data.conversation_id and not data.to_user_id):
+    has_content = (data.content and data.content.strip()) or data.voice_base64
+    if not has_content or (not data.conversation_id and not data.to_user_id):
         raise HTTPException(status_code=400, detail="Invalid payload")
     db_type = get_db_type()
     async with get_db() as conn:
@@ -2244,7 +2263,7 @@ async def send_message(data: MessageSend, user_id: int = Depends(get_current_use
                     SELECT c.id FROM conversations c
                     JOIN conversation_participants p1 ON p1.conversation_id=c.id AND p1.user_id=$1
                     JOIN conversation_participants p2 ON p2.conversation_id=c.id AND p2.user_id=$2
-                    WHERE c.is_group=0
+                    WHERE c.is_group = FALSE
                     LIMIT 1
                     """,
                     user_id, to_user
@@ -2253,7 +2272,7 @@ async def send_message(data: MessageSend, user_id: int = Depends(get_current_use
                     conversation_id = row['id']
                 else:
                     # create new conversation
-                    conversation_id = await conn.fetchval("INSERT INTO conversations (is_group) VALUES (0) RETURNING id")
+                    conversation_id = await conn.fetchval("INSERT INTO conversations (is_group) VALUES (FALSE) RETURNING id")
                     await conn.execute("INSERT INTO conversation_participants (conversation_id, user_id) VALUES ($1, $2)", conversation_id, user_id)
                     await conn.execute("INSERT INTO conversation_participants (conversation_id, user_id) VALUES ($1, $2)", conversation_id, to_user)
             else:  # sqlite
@@ -2271,10 +2290,10 @@ async def send_message(data: MessageSend, user_id: int = Depends(get_current_use
                     if row:
                         conversation_id = row[0]
                     else:
-                        # create new conversation
-                        cursor = await conn.execute("INSERT INTO conversations (is_group) VALUES (0)")
+                        # create new conversation — lastrowid читаем сразу после INSERT
+                        cur = await conn.execute("INSERT INTO conversations (is_group) VALUES (0)")
+                        conversation_id = cur.lastrowid
                         await conn.commit()
-                        conversation_id = cursor.lastrowid
                         await conn.execute("INSERT INTO conversation_participants (conversation_id, user_id) VALUES (?, ?)", (conversation_id, user_id))
                         await conn.execute("INSERT INTO conversation_participants (conversation_id, user_id) VALUES (?, ?)", (conversation_id, to_user))
                         await conn.commit()
@@ -2295,10 +2314,15 @@ async def send_message(data: MessageSend, user_id: int = Depends(get_current_use
         if not member:
             raise HTTPException(status_code=403, detail="Not a participant")
 
+        content_text = (data.content or "").strip() if data.content else ""
+        if data.voice_base64:
+            content_text = content_text or "[Голосовое сообщение]"
+        voice_url = data.voice_base64 if data.voice_base64 else None
+
         if db_type == 'postgresql':
             await conn.execute(
-                "INSERT INTO messages (conversation_id, sender_id, content) VALUES ($1, $2, $3)",
-                conversation_id, user_id, data.content
+                "INSERT INTO messages (conversation_id, sender_id, content, voice_url) VALUES ($1, $2, $3, $4)",
+                conversation_id, user_id, content_text, voice_url
             )
             # Получаем участников диалога для создания уведомлений
             participants = await conn.fetch(
@@ -2307,8 +2331,8 @@ async def send_message(data: MessageSend, user_id: int = Depends(get_current_use
             )
         else:  # sqlite
             await conn.execute(
-                "INSERT INTO messages (conversation_id, sender_id, content) VALUES (?, ?, ?)",
-                (conversation_id, user_id, data.content)
+                "INSERT INTO messages (conversation_id, sender_id, content, voice_url) VALUES (?, ?, ?, ?)",
+                (conversation_id, user_id, content_text, voice_url)
             )
             await conn.commit()
             # Получаем участников диалога для создания уведомлений

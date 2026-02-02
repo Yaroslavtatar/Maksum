@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import MainLayout from '../components/Layout/MainLayout';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Input } from '../components/ui/input';
@@ -12,10 +13,15 @@ import {
   Plus,
   Users,
   Send,
-  Loader2
+  Loader2,
+  Mic,
+  Square
 } from 'lucide-react';
 
 const MessagesPage = () => {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const openConversationId = location.state?.openConversationId;
   const [searchQuery, setSearchQuery] = useState('');
   const [conversations, setConversations] = useState([]);
   const [selectedConversation, setSelectedConversation] = useState(null);
@@ -23,6 +29,9 @@ const MessagesPage = () => {
   const [newMessage, setNewMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [recordingStopping, setRecordingStopping] = useState(false);
+  const mediaRecorderRef = useRef(null);
   const { user } = useUser();
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
@@ -30,6 +39,15 @@ const MessagesPage = () => {
   useEffect(() => {
     fetchConversations();
   }, []);
+
+  useEffect(() => {
+    if (!openConversationId || !conversations.length) return;
+    const conv = conversations.find(c => c.id === openConversationId);
+    if (conv) {
+      setSelectedConversation(conv);
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [openConversationId, conversations, navigate, location.pathname]);
 
   useEffect(() => {
     if (selectedConversation) {
@@ -80,15 +98,65 @@ const MessagesPage = () => {
         content: newMessage.trim()
       });
       setNewMessage('');
-      // Обновляем сообщения
       await fetchMessages(selectedConversation.id);
-      // Обновляем список диалогов
       await fetchConversations();
     } catch (error) {
       console.error('Error sending message:', error);
     } finally {
       setSending(false);
     }
+  };
+
+  const startRecording = async () => {
+    if (!selectedConversation || sending || recording) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      const chunks = [];
+      recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        if (chunks.length === 0) {
+          setRecordingStopping(false);
+          return;
+        }
+        const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+        const reader = new FileReader();
+        reader.onloadend = async () => {
+          const base64 = reader.result;
+          setSending(true);
+          try {
+            await api.post('/messages/send', {
+              conversation_id: selectedConversation.id,
+              content: '[Голосовое сообщение]',
+              voice_base64: base64
+            });
+            await fetchMessages(selectedConversation.id);
+            await fetchConversations();
+          } catch (err) {
+            console.error('Error sending voice:', err);
+          } finally {
+            setSending(false);
+            setRecordingStopping(false);
+          }
+        };
+        reader.readAsDataURL(blob);
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setRecording(true);
+    } catch (err) {
+      console.error('Error starting recording:', err);
+      alert('Нет доступа к микрофону');
+    }
+  };
+
+  const stopRecording = () => {
+    if (!mediaRecorderRef.current || mediaRecorderRef.current.state === 'inactive') return;
+    setRecordingStopping(true);
+    mediaRecorderRef.current.stop();
+    mediaRecorderRef.current = null;
+    setRecording(false);
   };
 
   const handleStartChat = async (userId) => {
@@ -251,7 +319,14 @@ const MessagesPage = () => {
                             : 'bg-muted'
                         }`}
                       >
-                        <p className="text-sm">{msg.content}</p>
+                        {msg.voice_url ? (
+                          <div className="space-y-1">
+                            <audio controls src={msg.voice_url} className="max-w-full h-9" />
+                            <p className="text-xs opacity-80">Голосовое сообщение</p>
+                          </div>
+                        ) : (
+                          <p className="text-sm">{msg.content}</p>
+                        )}
                         <p className={`text-xs mt-1 ${
                           msg.sender_id === user?.id ? 'text-primary-foreground/70' : 'text-muted-foreground'
                         }`}>
@@ -263,16 +338,25 @@ const MessagesPage = () => {
                 )}
                 <div ref={messagesEndRef} />
               </div>
-              <form onSubmit={handleSendMessage} className="p-4 border-t flex items-center space-x-2">
+              <form onSubmit={handleSendMessage} className="p-4 border-t flex items-center gap-2">
+                {recording ? (
+                  <Button type="button" variant="destructive" size="icon" onClick={stopRecording} disabled={recordingStopping} title="Остановить запись">
+                    <Square className="w-4 h-4 fill-current" />
+                  </Button>
+                ) : (
+                  <Button type="button" variant="outline" size="icon" onClick={startRecording} disabled={sending} title="Голосовое сообщение">
+                    <Mic className="w-4 h-4" />
+                  </Button>
+                )}
                 <Input
                   value={newMessage}
                   onChange={(e) => setNewMessage(e.target.value)}
-                  placeholder="Напишите сообщение..."
+                  placeholder={recording ? 'Идёт запись...' : 'Напишите сообщение...'}
                   className="flex-1"
-                  disabled={sending}
+                  disabled={sending || recording}
                 />
-                <Button type="submit" disabled={sending || !newMessage.trim()}>
-                  {sending ? (
+                <Button type="submit" disabled={sending || recording || !newMessage.trim()}>
+                  {sending && !recording ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
                   ) : (
                     <Send className="w-4 h-4" />

@@ -43,25 +43,45 @@ const UsersPage = () => {
     setSearchParams(query.trim() ? { q: query.trim() } : {});
   };
 
+  const [addingId, setAddingId] = useState(null);
   const addFriend = async (userId) => {
+    if (addingId === userId) return;
+    setAddingId(userId);
     try {
-      await api.post('/friends/request', { user_id: userId });
-      fetchUsers(urlQ);
+      const res = await api.post('/friends/request', { user_id: userId });
+      const status = res.data?.status;
+      if (status === 'accepted') {
+        setError('');
+        fetchUsers(urlQ);
+        alert('Теперь вы друзья!');
+      } else {
+        setError('');
+        fetchUsers(urlQ);
+        alert('Заявка отправлена');
+      }
     } catch (e) {
       const errorMsg = e?.response?.data?.detail || 'Не удалось отправить заявку';
-      setError(typeof errorMsg === 'string' ? errorMsg : JSON.stringify(errorMsg));
+      const msg = typeof errorMsg === 'string' ? errorMsg : JSON.stringify(errorMsg);
+      setError(msg);
+      if (msg.includes('Already friends') || msg.includes('уже друзья')) {
+        fetchUsers(urlQ);
+      }
+    } finally {
+      setAddingId(null);
     }
   };
 
   const startChat = async (userId) => {
     try {
-      await api.post('/messages/send', {
+      const res = await api.post('/messages/send', {
         to_user_id: userId,
         content: 'Привет!'
       });
-      navigate('/messages');
+      navigate('/messages', { state: { openConversationId: res.data?.conversation_id } });
     } catch (e) {
       console.error('Error starting chat:', e);
+      const msg = e?.response?.data?.detail || 'Не удалось начать чат';
+      setError(typeof msg === 'string' ? msg : 'Не удалось начать чат');
     }
   };
 
@@ -141,8 +161,13 @@ const UsersPage = () => {
                   <Button 
                     size="sm"
                     onClick={() => addFriend(u.id)}
+                    disabled={addingId === u.id}
                   >
-                    <UserPlus className="w-4 h-4 mr-2" />
+                    {addingId === u.id ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <UserPlus className="w-4 h-4 mr-2" />
+                    )}
                     В друзья
                   </Button>
                 </div>
