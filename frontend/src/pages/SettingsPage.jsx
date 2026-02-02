@@ -10,7 +10,6 @@ import { Switch } from '../components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Separator } from '../components/ui/separator';
 import { Avatar, AvatarFallback, AvatarImage } from '../components/ui/avatar';
-import axios from 'axios';
 import api from '../api/axios';
 import { useTheme } from '../hooks/useTheme';
 import {
@@ -53,6 +52,8 @@ const SettingsPage = () => {
     showOnlineStatus: true,
     showBirthDate: true,
     allowFriendsRequests: true,
+    hide_phone: false,
+    hide_email: false,
     
     // Notifications
     emailNotifications: true,
@@ -86,12 +87,15 @@ const SettingsPage = () => {
   useEffect(() => {
     (async () => {
       try {
-        const res = await axios.get('/users/me');
+        const res = await api.get('/users/me');
+        const d = res.data;
         setSettings((prev) => ({
           ...prev,
-          username: res.data.username || '',
-          email: res.data.email || '',
-          avatar_url: res.data.avatar_url || ''
+          username: d.username || '',
+          email: d.email || '',
+          avatar_url: d.avatar_url || '',
+          hide_phone: !!d.hide_phone,
+          hide_email: !!d.hide_email,
         }));
       } catch (e) {}
     })();
@@ -119,7 +123,7 @@ const SettingsPage = () => {
         email: settings.email,
         avatar_url: settings.avatar_url,
       };
-      const res = await axios.put('/users/me', payload);
+      const res = await api.put('/users/me', payload);
       setSettings((prev) => ({ ...prev, ...res.data }));
       alert('Настройки сохранены');
     } catch (e) {
@@ -313,6 +317,43 @@ const SettingsPage = () => {
                       <SelectItem value="nobody">Никто</SelectItem>
                     </SelectContent>
                   </Select>
+                </div>
+
+                <Separator />
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>Скрывать телефон в профиле</Label>
+                    <p className="text-sm text-gray-500">Другие пользователи не увидят ваш номер в вашем профиле</p>
+                  </div>
+                  <Switch
+                    checked={settings.hide_phone}
+                    onCheckedChange={async (checked) => {
+                      handleChange('hide_phone', checked);
+                      try {
+                        await api.put('/users/me', { hide_phone: checked });
+                      } catch (e) {
+                        handleChange('hide_phone', !checked);
+                      }
+                    }}
+                  />
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>Скрывать email в профиле</Label>
+                    <p className="text-sm text-gray-500">Другие пользователи не увидят вашу почту в вашем профиле</p>
+                  </div>
+                  <Switch
+                    checked={settings.hide_email}
+                    onCheckedChange={async (checked) => {
+                      handleChange('hide_email', checked);
+                      try {
+                        await api.put('/users/me', { hide_email: checked });
+                      } catch (e) {
+                        handleChange('hide_email', !checked);
+                      }
+                    }}
+                  />
                 </div>
 
                 <Separator />

@@ -72,13 +72,17 @@ const ProfilePage = () => {
     );
   }
 
+  const accent = user?.profile_accent || 'blue';
+  const accentBorderClass = { blue: 'border-l-blue-500', green: 'border-l-green-500', purple: 'border-l-purple-500', amber: 'border-l-amber-500', rose: 'border-l-rose-500' }[accent] || 'border-l-blue-500';
+  const accentBgClass = { blue: 'bg-blue-500 hover:bg-blue-600', green: 'bg-green-500 hover:bg-green-600', purple: 'bg-purple-500 hover:bg-purple-600', amber: 'bg-amber-500 hover:bg-amber-600', rose: 'bg-rose-500 hover:bg-rose-600' }[accent] || 'bg-blue-500 hover:bg-blue-600';
+
   return (
     <MainLayout>
       <div className="max-w-4xl mx-auto">
-        {/* Cover Photo & Profile Info */}
-        <Card className="mb-6">
+        {/* Cover Photo & Profile Info — баннер кастомный от пользователя, цветовая гамма профиля */}
+        <Card className={`mb-6 border-l-4 ${accentBorderClass}`}>
           <div className="relative">
-            {/* Cover Photo / Украшение профиля и цветовая гамма */}
+            {/* Баннер — всегда картинка пользователя или нейтральный градиент */}
             <div 
               className="h-64 rounded-t-lg overflow-hidden relative"
               style={{
@@ -115,7 +119,7 @@ const ProfilePage = () => {
                 {user && (
                   <Button 
                     size="sm" 
-                    className="absolute -bottom-2 -right-2 rounded-full w-10 h-10 p-0 bg-blue-500 hover:bg-blue-600 text-white shadow-lg"
+                    className={`absolute -bottom-2 -right-2 rounded-full w-10 h-10 p-0 text-white shadow-lg ${accentBgClass}`}
                     onClick={() => setEditModalOpen(true)}
                   >
                     <Camera className="w-5 h-5" />

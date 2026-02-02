@@ -74,7 +74,7 @@ const UsersPage = () => {
             <Input
               value={query}
               onChange={(e) => { setQuery(e.target.value); setError(''); }}
-              placeholder="Поиск людей по логину или email"
+              placeholder="Поиск по имени пользователя (логину)"
               className="pl-9"
             />
           </div>

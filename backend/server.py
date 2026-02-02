@@ -124,6 +124,8 @@ class UserUpdate(BaseModel):
     profile_accent: Optional[str] = None
     community_name: Optional[str] = None
     community_description: Optional[str] = None
+    hide_phone: Optional[bool] = None
+    hide_email: Optional[bool] = None
 
 class UserSearchResponse(BaseModel):
     id: int
@@ -508,14 +510,14 @@ async def get_me(user_id: int = Depends(get_current_user_id)):
     async with get_db() as conn:
         if db_type == 'postgresql':
             row = await conn.fetchrow(
-                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, is_admin, is_banned, last_seen FROM users WHERE id = $1",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, is_admin, is_banned, last_seen, hide_phone, hide_email FROM users WHERE id = $1",
                 user_id
             )
             if row:
                 row = dict(row)
         else:  # sqlite
             async with conn.execute(
-                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, is_admin, is_banned, last_seen FROM users WHERE id = ?",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, is_admin, is_banned, last_seen, hide_phone, hide_email FROM users WHERE id = ?",
                 (user_id,)
             ) as cursor:
                 row_data = await cursor.fetchone()
@@ -537,6 +539,8 @@ async def get_me(user_id: int = Depends(get_current_user_id)):
                         "is_admin": bool(row_data[13]) if len(row_data) > 13 else False,
                         "is_banned": bool(row_data[14]) if len(row_data) > 14 else False,
                         "last_seen": row_data[15] if len(row_data) > 15 else None,
+                        "hide_phone": bool(row_data[16]) if len(row_data) > 16 else False,
+                        "hide_email": bool(row_data[17]) if len(row_data) > 17 else False,
                     }
                 else:
                     row = None
@@ -701,14 +705,14 @@ async def get_user_by_username(username: str, _uid: int = Depends(get_current_us
     async with get_db() as conn:
         if db_type == 'postgresql':
             row = await conn.fetchrow(
-                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, last_seen FROM users WHERE username = $1",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, last_seen, hide_phone, hide_email FROM users WHERE username = $1",
                 username
             )
             if row:
                 row = dict(row)
         else:  # sqlite
             async with conn.execute(
-                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, last_seen FROM users WHERE username = ?",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, last_seen, hide_phone, hide_email FROM users WHERE username = ?",
                 (username,)
             ) as cursor:
                 row_data = await cursor.fetchone()
@@ -728,18 +732,26 @@ async def get_user_by_username(username: str, _uid: int = Depends(get_current_us
                         "community_name": row_data[11] if len(row_data) > 11 else None,
                         "community_description": row_data[12] if len(row_data) > 12 else None,
                         "last_seen": row_data[13] if len(row_data) > 13 else None,
+                        "hide_phone": bool(row_data[14]) if len(row_data) > 14 else False,
+                        "hide_email": bool(row_data[15]) if len(row_data) > 15 else False,
                     }
                 else:
                     row = None
         if not row:
             raise HTTPException(status_code=404, detail="User not found")
         row["status"] = get_status_from_last_seen(row.get("last_seen"))
+        # Приватность: для чужого профиля скрываем телефон/почту по настройкам
+        if row.get("id") != _uid:
+            if row.get("hide_phone"):
+                row["phone"] = None
+            if row.get("hide_email"):
+                row["email"] = None
     return row
 
 
 @api_router.get("/users/search", response_model=List[UserSearchResponse])
 async def search_users(q: Optional[str] = None, _uid: int = Depends(get_current_user_id)):
-    """Поиск пользователей по логину/email. Пустой q — возвращает рекомендации (кроме себя)."""
+    """Поиск пользователей по имени пользователя (username). Пустой q — возвращает рекомендации (кроме себя)."""
     db_type = get_db_type()
     async with get_db() as conn:
         if db_type == 'postgresql':
@@ -748,7 +760,7 @@ async def search_users(q: Optional[str] = None, _uid: int = Depends(get_current_
                 rows = await conn.fetch(
                     """SELECT id, username, email, avatar_url, last_seen FROM users
                        WHERE id != $1 AND (is_banned IS NOT TRUE OR is_banned IS NULL)
-                       AND (username ILIKE $2 OR email ILIKE $2) ORDER BY username LIMIT 50""",
+                       AND username ILIKE $2 ORDER BY username LIMIT 50""",
                     _uid, like
                 )
             else:
@@ -765,8 +777,8 @@ async def search_users(q: Optional[str] = None, _uid: int = Depends(get_current_
                 async with conn.execute(
                     """SELECT id, username, email, avatar_url, last_seen FROM users
                        WHERE id != ? AND (is_banned = 0 OR is_banned IS NULL)
-                       AND (username LIKE ? OR email LIKE ?) ORDER BY username LIMIT 50""",
-                    (_uid, like, like)
+                       AND username LIKE ? ORDER BY username LIMIT 50""",
+                    (_uid, like)
                 ) as cursor:
                     rows_data = await cursor.fetchall()
                     rows = [{"id": r[0], "username": r[1], "email": r[2], "avatar_url": r[3], "last_seen": r[4] if len(r) > 4 else None} for r in rows_data]
@@ -791,14 +803,14 @@ async def get_user_by_id(id: int, _uid: int = Depends(get_current_user_id)):
     async with get_db() as conn:
         if db_type == 'postgresql':
             row = await conn.fetchrow(
-                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, last_seen FROM users WHERE id = $1",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, last_seen, hide_phone, hide_email FROM users WHERE id = $1",
                 id
             )
             if row:
                 row = dict(row)
         else:  # sqlite
             async with conn.execute(
-                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, last_seen FROM users WHERE id = ?",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, last_seen, hide_phone, hide_email FROM users WHERE id = ?",
                 (id,)
             ) as cursor:
                 row_data = await cursor.fetchone()
@@ -818,12 +830,20 @@ async def get_user_by_id(id: int, _uid: int = Depends(get_current_user_id)):
                         "community_name": row_data[11] if len(row_data) > 11 else None,
                         "community_description": row_data[12] if len(row_data) > 12 else None,
                         "last_seen": row_data[13] if len(row_data) > 13 else None,
+                        "hide_phone": bool(row_data[14]) if len(row_data) > 14 else False,
+                        "hide_email": bool(row_data[15]) if len(row_data) > 15 else False,
                     }
                 else:
                     row = None
             if not row:
                 raise HTTPException(status_code=404, detail="User not found")
         row["status"] = get_status_from_last_seen(row.get("last_seen"))
+        # Приватность: для чужого профиля скрываем телефон/почту по настройкам
+        if id != _uid:
+            if row.get("hide_phone"):
+                row["phone"] = None
+            if row.get("hide_email"):
+                row["email"] = None
     return row
 
 @api_router.put("/users/me", response_model=UserPublic)
@@ -917,6 +937,20 @@ async def update_me(data: UserUpdate, user_id: int = Depends(get_current_user_id
         else:
             updates.append("community_description = ?")
         values.append(data.community_description)
+    if data.hide_phone is not None:
+        if db_type == 'postgresql':
+            updates.append(f"hide_phone = ${param_num}")
+            param_num += 1
+        else:
+            updates.append("hide_phone = ?")
+        values.append(data.hide_phone)
+    if data.hide_email is not None:
+        if db_type == 'postgresql':
+            updates.append(f"hide_email = ${param_num}")
+            param_num += 1
+        else:
+            updates.append("hide_email = ?")
+        values.append(data.hide_email)
     
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")

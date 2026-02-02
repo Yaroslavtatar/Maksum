@@ -133,13 +133,15 @@ const UserProfile = ({ username: usernameProp }) => {
   const coverStyle = user?.cover_photo
     ? { backgroundImage: `url(${user.cover_photo})`, backgroundSize: 'cover', backgroundPosition: 'center' }
     : { background: 'linear-gradient(135deg, #475569 0%, #334155 100%)', backgroundSize: 'cover', backgroundPosition: 'center' };
+  const accent = user?.profile_accent || 'blue';
+  const accentBorderClass = { blue: 'border-l-blue-500', green: 'border-l-green-500', purple: 'border-l-purple-500', amber: 'border-l-amber-500', rose: 'border-l-rose-500' }[accent] || 'border-l-blue-500';
 
   return (
     <MainLayout>
       <div className="max-w-4xl mx-auto">
-        <Card className="mb-6">
+        <Card className={`mb-6 border-l-4 ${accentBorderClass}`}>
           <div className="relative">
-            {/* Cover Photo */}
+            {/* Баннер профиля (кастомное изображение пользователя) */}
             <div
               className="h-64 rounded-t-lg overflow-hidden relative"
               style={coverStyle}
@@ -165,7 +167,7 @@ const UserProfile = ({ username: usernameProp }) => {
                   <h1 className="text-2xl font-bold">{user.username}</h1>
                   <StatusBadge status={user.status} />
                 </div>
-                <p className="text-muted-foreground mb-4">{user.email}</p>
+                {user.email && <p className="text-muted-foreground mb-4">{user.email}</p>}
 
                 <div className="space-y-3 text-sm mb-4">
                   {user.phone && (

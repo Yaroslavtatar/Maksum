@@ -195,9 +195,10 @@ const EditProfileModal = ({ open, onClose, user, onUpdate }) => {
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-6">
-          {/* Cover Photo */}
+          {/* Баннер — всегда кастомное изображение от пользователя */}
           <div>
-            <Label>Обложка профиля</Label>
+            <Label>Баннер профиля (ваше изображение)</Label>
+            <p className="text-xs text-muted-foreground mt-0.5 mb-2">Загрузите картинку — она будет фоном вашего профиля</p>
             <div className="relative mt-2 h-48 rounded-lg overflow-hidden bg-gradient-to-r from-blue-400 to-purple-500">
               {coverPreview && (
                 <img
@@ -215,7 +216,7 @@ const EditProfileModal = ({ open, onClose, user, onUpdate }) => {
                   className="bg-background/95 hover:bg-background text-foreground border-2 border-border shadow-xl backdrop-blur-md font-medium"
                 >
                   <Camera className="w-4 h-4 mr-2" />
-                  {coverPreview ? 'Изменить' : 'Загрузить обложку'}
+                  {coverPreview ? 'Изменить' : 'Загрузить баннер'}
                 </Button>
               </div>
               {coverPreview && (
@@ -391,7 +392,23 @@ const EditProfileModal = ({ open, onClose, user, onUpdate }) => {
             />
           </div>
 
-          {/* Смена цвета профиля отключена — баннер только обложка или нейтральный фон */}
+          {/* Цветовая гамма профиля — акцент рамок и кнопок в карточке профиля */}
+          <div>
+            <Label htmlFor="profile_accent">Цветовая гамма профиля</Label>
+            <p className="text-xs text-muted-foreground mt-0.5 mb-2">Цвет акцента в карточке профиля (рамка, кнопки)</p>
+            <select
+              id="profile_accent"
+              value={formData.profile_accent || 'blue'}
+              onChange={(e) => setFormData({ ...formData, profile_accent: e.target.value })}
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            >
+              <option value="blue">Синяя</option>
+              <option value="green">Зелёная</option>
+              <option value="purple">Фиолетовая</option>
+              <option value="amber">Янтарная</option>
+              <option value="rose">Розовая</option>
+            </select>
+          </div>
 
           {/* Привязка сообщества */}
           <div>

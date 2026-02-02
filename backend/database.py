@@ -448,6 +448,14 @@ async def init_db():
                 await conn.execute("ALTER TABLE users ALTER COLUMN cover_photo TYPE TEXT")
                 await conn.execute("INSERT INTO applied_migrations (name) VALUES ($1)", "avatar_cover_to_text")
                 logger.info("Миграция avatar_cover_to_text применена: avatar_url, cover_photo — TEXT")
+
+            # Приватность: скрытие телефона и почты в профиле
+            done3 = await conn.fetchval("SELECT 1 FROM applied_migrations WHERE name = $1", "privacy_hide_phone_email")
+            if done3 is None:
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS hide_phone BOOLEAN DEFAULT FALSE")
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS hide_email BOOLEAN DEFAULT FALSE")
+                await conn.execute("INSERT INTO applied_migrations (name) VALUES ($1)", "privacy_hide_phone_email")
+                logger.info("Миграция privacy_hide_phone_email применена: hide_phone, hide_email")
             
         else:  # SQLite
             # SQLite таблицы
@@ -599,6 +607,10 @@ async def init_db():
                     await conn.execute("ALTER TABLE users ADD COLUMN email_verification_token VARCHAR(255) NULL")
                 if 'email_verification_sent_at' not in columns:
                     await conn.execute("ALTER TABLE users ADD COLUMN email_verification_sent_at DATETIME NULL")
+                if 'hide_phone' not in columns:
+                    await conn.execute("ALTER TABLE users ADD COLUMN hide_phone BOOLEAN DEFAULT 0")
+                if 'hide_email' not in columns:
+                    await conn.execute("ALTER TABLE users ADD COLUMN hide_email BOOLEAN DEFAULT 0")
             except Exception as e:
                 logger.warning(f"Миграция колонок users: {e}")
 
