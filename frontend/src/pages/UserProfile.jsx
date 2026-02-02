@@ -1,29 +1,25 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import MainLayout from '../components/Layout/MainLayout';
-import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '../components/ui/avatar';
 import api from '../api/axios';
 import { useUser } from '../context/UserContext';
 import StatusBadge from '../components/Profile/StatusBadge';
-import { UserPlus, MessageCircle, Loader2, MapPin, Calendar, Users, Phone } from 'lucide-react';
-
-const ACCENT_STYLES = {
-  blue: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-  green: 'linear-gradient(135deg, #10b981 0%, #0d9488 100%)',
-  purple: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
-  teal: 'linear-gradient(135deg, #14b8a6 0%, #06b6d4 100%)',
-};
+import PostCard from '../components/Feed/PostCard';
+import { UserPlus, MessageCircle, Loader2, MapPin, Calendar, Phone } from 'lucide-react';
 
 const UserProfile = ({ username: usernameProp }) => {
   const { id: idParam } = useParams();
   const [user, setUser] = useState(null);
+  const [posts, setPosts] = useState([]);
+  const [postsLoading, setPostsLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isFriend, setIsFriend] = useState(false);
   const [friendRequestSent, setFriendRequestSent] = useState(false);
   const navigate = useNavigate();
-  const { user: currentUser } = useUser();
+  const { user: currentUser, likePost } = useUser();
 
   const byUsername = !!usernameProp;
   const identifier = byUsername ? usernameProp : idParam;
@@ -35,6 +31,17 @@ const UserProfile = ({ username: usernameProp }) => {
   useEffect(() => {
     if (!user?.id) return;
     checkFriendship();
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    let cancelled = false;
+    setPostsLoading(true);
+    api.get(`/users/${user.id}/posts`)
+      .then((res) => { if (!cancelled) setPosts(Array.isArray(res.data) ? res.data : []); })
+      .catch(() => { if (!cancelled) setPosts([]); })
+      .finally(() => { if (!cancelled) setPostsLoading(false); });
+    return () => { cancelled = true; };
   }, [user?.id]);
 
   const fetchUser = async () => {
@@ -125,7 +132,7 @@ const UserProfile = ({ username: usernameProp }) => {
   const isOwnProfile = currentUser?.id === user?.id;
   const coverStyle = user?.cover_photo
     ? { backgroundImage: `url(${user.cover_photo})`, backgroundSize: 'cover', backgroundPosition: 'center' }
-    : { background: (user?.profile_accent && ACCENT_STYLES[user.profile_accent]) || ACCENT_STYLES.blue, backgroundSize: 'cover', backgroundPosition: 'center' };
+    : { background: 'linear-gradient(135deg, #475569 0%, #334155 100%)', backgroundSize: 'cover', backgroundPosition: 'center' };
 
   return (
     <MainLayout>
@@ -239,6 +246,37 @@ const UserProfile = ({ username: usernameProp }) => {
                 </div>
               )}
             </div>
+          </CardContent>
+        </Card>
+
+        {/* Стена (посты пользователя) */}
+        <Card className="mb-6">
+          <CardContent className="pt-6">
+            <h2 className="text-lg font-semibold mb-4">Записи</h2>
+            {postsLoading ? (
+              <div className="flex justify-center py-8">
+                <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+              </div>
+            ) : posts.length === 0 ? (
+              <p className="text-muted-foreground text-center py-8">Пока нет записей</p>
+            ) : (
+              <div className="space-y-4">
+                {posts.map((post) => (
+                  <PostCard
+                    key={post.id}
+                    post={post}
+                    onLike={async () => {
+                      try {
+                        const data = await likePost(post.id);
+                        if (data) setPosts((prev) => prev.map((p) => p.id === post.id ? { ...p, liked: data.liked, likes: data.likes } : p));
+                      } catch (_) {}
+                    }}
+                    onAuthorClick={undefined}
+                    onCommentAdded={() => api.get(`/users/${user.id}/posts`).then((r) => setPosts(Array.isArray(r.data) ? r.data : []))}
+                  />
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

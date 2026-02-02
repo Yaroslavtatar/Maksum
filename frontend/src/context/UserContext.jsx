@@ -143,6 +143,7 @@ export const UserProvider = ({ children }) => {
   // Выход из аккаунта
   const logout = useCallback(() => {
     localStorage.removeItem('token');
+    localStorage.removeItem('device_id');
     setUser(null);
     setFriends([]);
     setPosts([]);

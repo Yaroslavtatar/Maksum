@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Response, UploadFile, File, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Response, UploadFile, File, Query, Request, Header
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
@@ -96,10 +96,19 @@ class RegisterInput(BaseModel):
 class LoginInput(BaseModel):
     username_or_email: str
     password: str
+    device_name: Optional[str] = None  # для механики «устройства безопасности»: имя устройства/браузера
 
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    device_id: Optional[int] = None  # если логин с device_name — id записи в user_devices
+
+class DeviceInfo(BaseModel):
+    id: int
+    name: str
+    user_agent: Optional[str]
+    last_used_at: Optional[str]
+    created_at: str
 
 class UserUpdate(BaseModel):
     username: Optional[str] = None
@@ -263,8 +272,11 @@ def get_status_from_last_seen(last_seen) -> str:
         pass
     return "offline"
 
-async def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depends(security)) -> int:
-    """Получить ID текущего пользователя из JWT"""
+async def get_current_user_id(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    x_device_id: Optional[str] = Header(None, alias="X-Device-Id"),
+) -> int:
+    """Получить ID текущего пользователя из JWT. Если передан X-Device-Id — обновить last_used_at устройства."""
     token = credentials.credentials
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
@@ -285,12 +297,30 @@ async def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depend
             await conn.execute("UPDATE users SET last_seen = NOW() WHERE id = $1", user_id)
         else:
             await conn.execute("UPDATE users SET last_seen = datetime('now') WHERE id = ?", (user_id,))
+        # Механика устройств безопасности: обновить время последнего использования устройства
+        if x_device_id:
+            try:
+                did = int(x_device_id)
+                if db_type == 'postgresql':
+                    await conn.execute(
+                        "UPDATE user_devices SET last_used_at = NOW() WHERE id = $1 AND user_id = $2",
+                        did, user_id
+                    )
+                else:
+                    await conn.execute(
+                        "UPDATE user_devices SET last_used_at = datetime('now') WHERE id = ? AND user_id = ?",
+                        (did, user_id)
+                    )
+                    await conn.commit()
+            except ValueError:
+                pass
+        if db_type != 'postgresql':
             await conn.commit()
     return user_id
 
 
 async def get_current_admin(user_id: int = Depends(get_current_user_id)) -> int:
-    """Только для администраторов; иначе 403. ВРЕМЕННО: всем авторизованным даём доступ к админке."""
+    """Только для администраторов; иначе 403. Назначение админов — через админку (PATCH /admin/users/{id})."""
     db_type = get_db_type()
     async with get_db() as conn:
         if db_type == 'postgresql':
@@ -304,9 +334,8 @@ async def get_current_admin(user_id: int = Depends(get_current_user_id)) -> int:
             raise HTTPException(status_code=404, detail="User not found")
         if row.get("is_banned"):
             raise HTTPException(status_code=403, detail="Account is banned")
-        # ВРЕМЕННО отключено: любой авторизованный = админ. Вернуть проверку: if not row.get("is_admin"): raise ...
-        # if not row.get("is_admin"):
-        #     raise HTTPException(status_code=403, detail="Admin access required")
+        if not row.get("is_admin"):
+            raise HTTPException(status_code=403, detail="Admin access required")
     return user_id
 
 
@@ -342,6 +371,11 @@ async def root():
 # ===================== Auth API =====================
 @api_router.post("/auth/register", response_model=UserPublic)
 async def register_user(data: RegisterInput):
+    # TODO: подтверждение почты — после вставки пользователя:
+    # 1) сгенерировать email_verification_token (uuid/random), записать в users + email_verification_sent_at
+    # 2) отправить письмо с ссылкой вида /verify-email?token=... (через SMTP/сервис)
+    # 3) endpoint GET /auth/verify-email?token=... — найти user по token, выставить email_verified_at=NOW(), очистить token
+    # 4) при смене пароля/чувствительных действиях опционально проверять email_verified_at IS NOT NULL
     db_type = get_db_type()
     async with get_db() as conn:
         if db_type == 'postgresql':
@@ -377,8 +411,9 @@ async def register_user(data: RegisterInput):
             return UserPublic(id=user_id, username=data.username, email=data.email, avatar_url=None)
 
 @api_router.post("/auth/login", response_model=TokenResponse)
-async def login_user(data: LoginInput):
+async def login_user(request: Request, data: LoginInput):
     db_type = get_db_type()
+    user_agent = request.headers.get("user-agent") or ""
     async with get_db() as conn:
         if db_type == 'postgresql':
             row = await conn.fetchrow(
@@ -405,7 +440,44 @@ async def login_user(data: LoginInput):
         if user.get("is_banned"):
             raise HTTPException(status_code=403, detail="Account is banned")
         token = create_access_token({"sub": str(user["id"])})
-        return TokenResponse(access_token=token)
+        device_id = None
+        if data.device_name and data.device_name.strip():
+            name = (data.device_name.strip() or "Устройство")[:255]
+            if db_type == 'postgresql':
+                device_id = await conn.fetchval(
+                    "INSERT INTO user_devices (user_id, name, user_agent) VALUES ($1, $2, $3) RETURNING id",
+                    user["id"], name, user_agent[:1024] if user_agent else None
+                )
+            else:
+                cursor = await conn.execute(
+                    "INSERT INTO user_devices (user_id, name, user_agent) VALUES (?, ?, ?)",
+                    (user["id"], name, user_agent[:1024] if user_agent else None)
+                )
+                await conn.commit()
+                device_id = cursor.lastrowid
+        return TokenResponse(access_token=token, device_id=device_id)
+
+
+# ---------- Основа для подтверждения почты (реализация по желанию) ----------
+# Эндпоинты-заглушки: раскомментировать и дописать логику (SMTP, шаблон письма, ссылка на фронт).
+#
+# @api_router.get("/auth/verify-email")
+# async def verify_email(token: str = Query(...)):
+#     """Переход по ссылке из письма: найти user по email_verification_token=token,
+#        выставить email_verified_at=NOW(), очистить email_verification_token и _sent_at.
+#        Вернуть редирект на фронт /login?verified=1 или JSON { "verified": true }."""
+#     # async with get_db() as conn:
+#     #     row = await conn.fetchrow("SELECT id FROM users WHERE email_verification_token = $1", token)
+#     #     if not row: raise HTTPException(404, "Invalid or expired link")
+#     #     await conn.execute("UPDATE users SET email_verified_at = NOW(), email_verification_token = NULL, email_verification_sent_at = NULL WHERE id = $1", row["id"])
+#     raise HTTPException(status_code=501, detail="Email verification not implemented yet")
+#
+# @api_router.post("/auth/send-verification-email")
+# async def send_verification_email(user_id: int = Depends(get_current_user_id)):
+#     """Выслать повторно письмо с ссылкой подтверждения. Ограничить частоту по email_verification_sent_at (например раз в 5 мин)."""
+#     # Получить email пользователя, сгенерировать новый token, записать в users, отправить письмо (SMTP/SendGrid и т.д.)
+#     raise HTTPException(status_code=501, detail="Email verification not implemented yet")
+
 
 # ===================== Users API =====================
 @api_router.get("/users/me")
@@ -466,6 +538,93 @@ async def ping_activity(user_id: int = Depends(get_current_user_id)):
             await conn.execute("UPDATE users SET last_seen = datetime('now') WHERE id = ?", (user_id,))
             await conn.commit()
     return {"status": "ok"}
+
+
+# ===================== Устройства безопасности =====================
+@api_router.get("/users/me/devices", response_model=List[DeviceInfo])
+async def list_my_devices(user_id: int = Depends(get_current_user_id)):
+    """Список устройств, с которых выполнялся вход (для отзыва сессий)."""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            rows = await conn.fetch(
+                "SELECT id, name, user_agent, last_used_at, created_at FROM user_devices WHERE user_id = $1 ORDER BY last_used_at DESC",
+                user_id
+            )
+            out = [
+                DeviceInfo(
+                    id=r["id"],
+                    name=r["name"],
+                    user_agent=r["user_agent"],
+                    last_used_at=r["last_used_at"].isoformat() if r["last_used_at"] else None,
+                    created_at=r["created_at"].isoformat() if r["created_at"] else "",
+                )
+                for r in rows
+            ]
+        else:
+            async with conn.execute(
+                "SELECT id, name, user_agent, last_used_at, created_at FROM user_devices WHERE user_id = ? ORDER BY last_used_at DESC",
+                (user_id,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+            out = [
+                DeviceInfo(
+                    id=r[0],
+                    name=r[1] or "Устройство",
+                    user_agent=r[2],
+                    last_used_at=r[3].isoformat() if getattr(r[3], "isoformat", None) else str(r[3]) if r[3] else None,
+                    created_at=r[4].isoformat() if getattr(r[4], "isoformat", None) else str(r[4]) if r[4] else "",
+                )
+                for r in rows
+            ]
+    return out
+
+
+@api_router.delete("/users/me/devices/{device_id}")
+async def revoke_device(device_id: int, user_id: int = Depends(get_current_user_id)):
+    """Отозвать одно устройство (удалить из списка). Токен на том устройстве останется валидным до истечения срока."""
+    db_type = get_db_type()
+    deleted = False
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            r = await conn.execute("DELETE FROM user_devices WHERE id = $1 AND user_id = $2", device_id, user_id)
+            deleted = r and r != "DELETE 0"
+        else:
+            await conn.execute("DELETE FROM user_devices WHERE id = ? AND user_id = ?", (device_id, user_id))
+            deleted = conn.total_changes > 0
+            await conn.commit()
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Device not found")
+    return {"status": "revoked"}
+
+
+@api_router.delete("/users/me/devices/others")
+async def revoke_other_devices(
+    user_id: int = Depends(get_current_user_id),
+    x_device_id: Optional[str] = Header(None, alias="X-Device-Id"),
+):
+    """Отозвать все устройства кроме текущего. Нужен заголовок X-Device-Id — id текущего устройства."""
+    if not x_device_id:
+        raise HTTPException(status_code=400, detail="X-Device-Id header required to identify current device")
+    try:
+        current_id = int(x_device_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid X-Device-Id")
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            await conn.execute(
+                "DELETE FROM user_devices WHERE user_id = $1 AND id != $2",
+                user_id, current_id
+            )
+        else:
+            await conn.execute(
+                "DELETE FROM user_devices WHERE user_id = ? AND id != ?",
+                (user_id, current_id)
+            )
+            await conn.commit()
+    return {"status": "revoked", "kept_device_id": current_id}
+
 
 @api_router.get("/users/username/{username}")
 async def get_user_by_username(username: str, _uid: int = Depends(get_current_user_id)):
@@ -1221,6 +1380,68 @@ async def get_my_posts(user_id: int = Depends(get_current_user_id)):
         post_ids = [r["id"] for r in rows]
         tags_map = await get_tags_for_posts(conn, db_type, post_ids)
     
+    return [
+        {
+            "id": r["id"],
+            "author_id": r["author_id"],
+            "author_username": r["username"],
+            "author_avatar": r["avatar_url"],
+            "content": r["content"],
+            "images": json.loads(r["images"]) if r["images"] else [],
+            "likes": r["likes_count"],
+            "comments": r["comments_count"],
+            "liked": r["liked"],
+            "created_at": r["created_at"],
+            "tags": tags_map.get(r["id"], [])
+        }
+        for r in rows
+    ]
+
+@api_router.get("/users/{target_user_id}/posts")
+async def get_user_posts(target_user_id: int, current_user_id: int = Depends(get_current_user_id)):
+    """Стена пользователя: посты по author_id. Любой авторизованный может смотреть, лайкать и комментировать."""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            rows = await conn.fetch(
+                """
+                SELECT p.id, p.author_id, p.content, p.images, p.likes_count, p.comments_count, p.created_at,
+                       u.username, u.avatar_url,
+                       EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = $1) as liked
+                FROM posts p
+                JOIN users u ON u.id = p.author_id
+                WHERE p.author_id = $2
+                ORDER BY p.created_at DESC
+                LIMIT 100
+                """,
+                current_user_id, target_user_id
+            )
+            rows = [dict(r) for r in rows]
+        else:
+            async with conn.execute(
+                """
+                SELECT p.id, p.author_id, p.content, p.images, p.likes_count, p.comments_count, p.created_at,
+                       u.username, u.avatar_url,
+                       EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = ?) as liked
+                FROM posts p
+                JOIN users u ON u.id = p.author_id
+                WHERE p.author_id = ?
+                ORDER BY p.created_at DESC
+                LIMIT 100
+                """,
+                (current_user_id, target_user_id)
+            ) as cursor:
+                rows_data = await cursor.fetchall()
+                rows = [
+                    {
+                        "id": r[0], "author_id": r[1], "content": r[2], "images": r[3],
+                        "likes_count": r[4], "comments_count": r[5], "created_at": r[6],
+                        "username": r[7], "avatar_url": r[8], "liked": bool(r[9])
+                    }
+                    for r in rows_data
+                ]
+        post_ids = [r["id"] for r in rows]
+        tags_map = await get_tags_for_posts(conn, db_type, post_ids)
     return [
         {
             "id": r["id"],

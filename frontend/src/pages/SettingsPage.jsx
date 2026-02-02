@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Separator } from '../components/ui/separator';
 import { Avatar, AvatarFallback, AvatarImage } from '../components/ui/avatar';
 import axios from 'axios';
+import api from '../api/axios';
 import { useTheme } from '../hooks/useTheme';
 import {
   User,
@@ -34,7 +35,8 @@ import {
   CheckCircle2,
   Sun,
   Moon,
-  Circle
+  Circle,
+  Monitor
 } from 'lucide-react';
 
 const SettingsPage = () => {
@@ -76,6 +78,10 @@ const SettingsPage = () => {
     // Applications
     connectedApps: []
   });
+  const [devices, setDevices] = useState([]);
+  const [devicesLoading, setDevicesLoading] = useState(false);
+  const [revokingId, setRevokingId] = useState(null);
+  const currentDeviceId = typeof localStorage !== 'undefined' ? localStorage.getItem('device_id') : null;
 
   useEffect(() => {
     (async () => {
@@ -90,6 +96,17 @@ const SettingsPage = () => {
       } catch (e) {}
     })();
   }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'security') return;
+    let cancelled = false;
+    setDevicesLoading(true);
+    api.get('/users/me/devices')
+      .then((res) => { if (!cancelled) setDevices(Array.isArray(res.data) ? res.data : []); })
+      .catch(() => { if (!cancelled) setDevices([]); })
+      .finally(() => { if (!cancelled) setDevicesLoading(false); });
+    return () => { cancelled = true; };
+  }, [activeTab]);
 
   const handleChange = (field, value) => {
     setSettings(prev => ({ ...prev, [field]: value }));
@@ -781,6 +798,68 @@ const SettingsPage = () => {
                       onCheckedChange={(checked) => handleChange('loginAlerts', checked)}
                     />
                   </div>
+                </div>
+
+                <Separator />
+
+                <div className="space-y-3">
+                  <Label className="flex items-center gap-2">
+                    <Monitor className="w-4 h-4" />
+                    Активные устройства
+                  </Label>
+                  <p className="text-sm text-gray-500">Устройства, с которых выполнялся вход. Можно отозвать сессию — устройство останется в списке до следующего входа.</p>
+                  {devicesLoading ? (
+                    <p className="text-sm text-muted-foreground py-4">Загрузка...</p>
+                  ) : devices.length === 0 ? (
+                    <p className="text-sm text-muted-foreground py-4">Нет записей об устройствах. Войдите с указанием имени устройства.</p>
+                  ) : (
+                    <ul className="space-y-2">
+                      {devices.map((d) => (
+                        <li key={d.id} className="flex items-center justify-between p-3 border rounded-lg">
+                          <div className="min-w-0">
+                            <p className="font-medium truncate">{d.name || 'Устройство'}</p>
+                            <p className="text-xs text-muted-foreground">
+                              Последняя активность: {d.last_used_at ? new Date(d.last_used_at).toLocaleString('ru') : '—'}
+                            </p>
+                          </div>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={revokingId === d.id}
+                            onClick={async () => {
+                              setRevokingId(d.id);
+                              try {
+                                await api.delete(`/users/me/devices/${d.id}`);
+                                setDevices((prev) => prev.filter((x) => x.id !== d.id));
+                              } catch (e) {
+                                alert('Не удалось отозвать устройство');
+                              } finally {
+                                setRevokingId(null);
+                              }
+                            }}
+                          >
+                            {revokingId === d.id ? '...' : 'Отозвать'}
+                          </Button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {devices.length > 1 && currentDeviceId && (
+                    <Button
+                      variant="outline"
+                      className="w-full sm:w-auto"
+                      onClick={async () => {
+                        try {
+                          await api.delete('/users/me/devices/others');
+                          setDevices((prev) => prev.filter((d) => String(d.id) === currentDeviceId));
+                        } catch (e) {
+                          alert(e?.response?.data?.detail || 'Не удалось отозвать другие устройства');
+                        }
+                      }}
+                    >
+                      Отозвать все устройства кроме этого
+                    </Button>
+                  )}
                 </div>
 
                 <Separator />

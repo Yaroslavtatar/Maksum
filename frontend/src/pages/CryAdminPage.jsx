@@ -22,10 +22,9 @@ const CryAdminPage = () => {
   const [skip, setSkip] = useState(0);
   const limit = 20;
 
-  // ВРЕМЕННО: доступ всем. Вернуть проверку: if (!user?.is_admin) navigate('/');
   useEffect(() => {
     if (userLoading) return;
-    // if (!user?.is_admin) navigate('/');
+    if (!user?.is_admin) navigate('/', { replace: true });
   }, [user, userLoading, navigate]);
 
   const loadUsers = async () => {
@@ -126,14 +125,13 @@ const CryAdminPage = () => {
       </div>
     );
   }
-  // ВРЕМЕННО: доступ всем. Вернуть: if (!user?.is_admin) return <div>Доступ запрещён</div>;
-  // if (!user?.is_admin) {
-  //   return (
-  //     <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-  //       <p className="text-gray-600 dark:text-gray-400">Доступ запрещён.</p>
-  //     </div>
-  //   );
-  // }
+  if (!user?.is_admin) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+        <p className="text-gray-600 dark:text-gray-400">Доступ запрещён. Только для администраторов.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 p-4 md:p-6">

@@ -100,8 +100,7 @@ const Sidebar = () => {
             </Link>
           );
         })}
-        {/* ВРЕМЕННО: админка доступна всем. Вернуть: user?.is_admin && */}
-        {user && (
+        {user?.is_admin && (
           <Link
             to="/cryadmin"
             className={`flex items-center space-x-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors mt-2

@@ -13,13 +13,6 @@ import {
   Loader2,
 } from 'lucide-react';
 
-const ACCENT_COLORS = {
-  blue: 'from-blue-500 to-blue-700',
-  green: 'from-emerald-500 to-teal-700',
-  purple: 'from-purple-500 to-violet-700',
-  teal: 'from-teal-400 to-cyan-600',
-};
-
 const UserPreviewModal = ({ userId, open, onClose }) => {
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
@@ -54,9 +47,9 @@ const UserPreviewModal = ({ userId, open, onClose }) => {
     }
   };
 
-  const accentClass = user?.profile_accent && ACCENT_COLORS[user.profile_accent]
-    ? ACCENT_COLORS[user.profile_accent]
-    : 'from-blue-500 to-purple-600';
+  const bannerStyle = user?.cover_photo
+    ? { backgroundImage: `url(${user.cover_photo})`, backgroundSize: 'cover', backgroundPosition: 'center' }
+    : { background: 'linear-gradient(135deg, #475569 0%, #334155 100%)' };
 
   return (
     <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
@@ -67,8 +60,7 @@ const UserPreviewModal = ({ userId, open, onClose }) => {
           </div>
         ) : user ? (
           <>
-            {/* Украшение профиля / цветовая гамма */}
-            <div className={`h-20 bg-gradient-to-br ${accentClass} relative`} />
+            <div className="h-20 relative" style={bannerStyle} />
             <div className="px-4 pb-4 -mt-12 relative z-10">
               <Avatar className="w-24 h-24 border-4 border-background shadow-xl ring-2 ring-background">
                 <AvatarImage src={user.avatar_url} alt={user.username} />

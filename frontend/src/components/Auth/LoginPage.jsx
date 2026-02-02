@@ -42,14 +42,20 @@ const LoginPage = () => {
     setLoading(true);
 
     try {
+      // Имя устройства для механики «устройства безопасности» (список сессий в настройках)
+      const ua = typeof navigator !== 'undefined' ? (navigator.userAgent || '').slice(0, 100) : '';
+      const deviceName = ua || 'Браузер';
       const response = await axios.post('/auth/login', {
         username_or_email: loginData.email,
         password: loginData.password,
+        device_name: deviceName,
       });
       
       if (response.data.access_token) {
         localStorage.setItem('token', response.data.access_token);
-        // Отправляем событие для обновления данных пользователя
+        if (response.data.device_id != null) {
+          localStorage.setItem('device_id', String(response.data.device_id));
+        }
         window.dispatchEvent(new Event('maksum:token-set'));
         setSuccess('Успешный вход! Перенаправление...');
         setTimeout(() => {

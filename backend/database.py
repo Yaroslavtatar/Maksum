@@ -348,9 +348,26 @@ async def init_db():
                 await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE")
                 await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_banned BOOLEAN DEFAULT FALSE")
                 await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP NULL")
+                # Основа для подтверждения почты: после реализации — отправлять письмо и ставить email_verified_at при переходе по ссылке
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMP NULL")
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_token VARCHAR(255) NULL")
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_sent_at TIMESTAMP NULL")
             except Exception:
                 pass
-            
+
+            # Устройства безопасности: список доверенных устройств/сессий, можно отзывать
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS user_devices (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    name VARCHAR(255) NOT NULL DEFAULT 'Устройство',
+                    user_agent TEXT NULL,
+                    last_used_at TIMESTAMP DEFAULT NOW(),
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_devices_user ON user_devices(user_id)")
+
             # Таблицы для системы рекомендаций: теги и подписки
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS tags (
@@ -410,6 +427,19 @@ async def init_db():
                 FOR EACH ROW
                 EXECUTE FUNCTION update_updated_at_column();
             """)
+
+            # Одноразовая миграция: админы только durov и илья_новиков_65vsj
+            await conn.execute("CREATE TABLE IF NOT EXISTS applied_migrations (name TEXT PRIMARY KEY)")
+            done = await conn.fetchval("SELECT 1 FROM applied_migrations WHERE name = $1", "reset_admins_durov_ilya")
+            if done is None:
+                await conn.execute(
+                    "UPDATE users SET is_admin = FALSE WHERE username IS NULL OR username NOT IN ('durov', 'илья_новиков_65vsj')"
+                )
+                await conn.execute(
+                    "UPDATE users SET is_admin = TRUE WHERE username IN ('durov', 'илья_новиков_65vsj')"
+                )
+                await conn.execute("INSERT INTO applied_migrations (name) VALUES ($1)", "reset_admins_durov_ilya")
+                logger.info("Миграция reset_admins_durov_ilya применена: админы только durov, илья_новиков_65vsj")
             
         else:  # SQLite
             # SQLite таблицы
@@ -554,8 +584,29 @@ async def init_db():
                     await conn.execute("ALTER TABLE users ADD COLUMN is_banned BOOLEAN DEFAULT 0")
                 if 'last_seen' not in columns:
                     await conn.execute("ALTER TABLE users ADD COLUMN last_seen DATETIME NULL")
+                # Основа для подтверждения почты
+                if 'email_verified_at' not in columns:
+                    await conn.execute("ALTER TABLE users ADD COLUMN email_verified_at DATETIME NULL")
+                if 'email_verification_token' not in columns:
+                    await conn.execute("ALTER TABLE users ADD COLUMN email_verification_token VARCHAR(255) NULL")
+                if 'email_verification_sent_at' not in columns:
+                    await conn.execute("ALTER TABLE users ADD COLUMN email_verification_sent_at DATETIME NULL")
             except Exception as e:
                 logger.warning(f"Миграция колонок users: {e}")
+
+            # Устройства безопасности (SQLite)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS user_devices (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    name VARCHAR(255) NOT NULL DEFAULT 'Устройство',
+                    user_agent TEXT NULL,
+                    last_used_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_devices_user ON user_devices(user_id)")
             
             # Таблица уведомлений SQLite
             await conn.execute("""
@@ -626,6 +677,24 @@ async def init_db():
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_tag_subscriptions_tag ON user_tag_subscriptions(tag_id)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, is_read)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at)")
+
+            # Одноразовая миграция: админы только durov и илья_новиков_65vsj
+            await conn.execute("CREATE TABLE IF NOT EXISTS applied_migrations (name TEXT PRIMARY KEY)")
+            async with conn.execute(
+                "SELECT 1 FROM applied_migrations WHERE name = ?", ("reset_admins_durov_ilya",)
+            ) as cur:
+                done = await cur.fetchone()
+            if done is None:
+                await conn.execute(
+                    "UPDATE users SET is_admin = 0 WHERE username IS NULL OR username NOT IN ('durov', 'илья_новиков_65vsj')"
+                )
+                await conn.execute(
+                    "UPDATE users SET is_admin = 1 WHERE username IN ('durov', 'илья_новиков_65vsj')"
+                )
+                await conn.execute(
+                    "INSERT INTO applied_migrations (name) VALUES (?)", ("reset_admins_durov_ilya",)
+                )
+                logger.info("Миграция reset_admins_durov_ilya применена: админы только durov, илья_новиков_65vsj")
             
             await conn.commit()
     

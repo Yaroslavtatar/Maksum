@@ -59,6 +59,8 @@ backend/data/*.db-shm
 
 # Логи и кэш
 *.log
+logs/
+.run.pid
 .pytest_cache/
 .coverage
 htmlcov/

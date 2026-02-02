@@ -73,13 +73,7 @@ const ProfilePage = () => {
               style={{
                 backgroundImage: user?.cover_photo 
                   ? `url(${user.cover_photo})` 
-                  : user?.profile_accent === 'green' 
-                    ? 'linear-gradient(135deg, #10b981 0%, #0d9488 100%)'
-                    : user?.profile_accent === 'purple'
-                      ? 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)'
-                      : user?.profile_accent === 'teal'
-                        ? 'linear-gradient(135deg, #14b8a6 0%, #06b6d4 100%)'
-                        : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  : 'linear-gradient(135deg, #475569 0%, #334155 100%)',
                 backgroundSize: 'cover',
                 backgroundPosition: 'center',
               }}

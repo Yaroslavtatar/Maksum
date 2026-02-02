@@ -315,21 +315,7 @@ const EditProfileModal = ({ open, onClose, user, onUpdate }) => {
             />
           </div>
 
-          {/* Цветовая гамма / украшение профиля */}
-          <div>
-            <Label htmlFor="profile_accent">Цветовая гамма профиля</Label>
-            <select
-              id="profile_accent"
-              value={formData.profile_accent}
-              onChange={(e) => setFormData({ ...formData, profile_accent: e.target.value })}
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-            >
-              <option value="blue">Синий</option>
-              <option value="green">Зелёный</option>
-              <option value="purple">Фиолетовый</option>
-              <option value="teal">Бирюзовый</option>
-            </select>
-          </div>
+          {/* Смена цвета профиля отключена — баннер только обложка или нейтральный фон */}
 
           {/* Привязка сообщества */}
           <div>
