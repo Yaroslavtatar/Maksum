@@ -73,11 +73,9 @@ const UsersPage = () => {
 
   const startChat = async (userId) => {
     try {
-      const res = await api.post('/messages/send', {
-        to_user_id: userId,
-        content: 'Привет!'
-      });
-      navigate('/messages', { state: { openConversationId: res.data?.conversation_id } });
+      const res = await api.post('/conversations/with', { to_user_id: userId });
+      const convId = res.data?.conversation_id;
+      if (convId) navigate('/messages', { state: { openConversationId: convId } });
     } catch (e) {
       console.error('Error starting chat:', e);
       const msg = e?.response?.data?.detail || 'Не удалось начать чат';

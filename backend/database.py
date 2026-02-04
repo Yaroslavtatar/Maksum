@@ -470,6 +470,14 @@ async def init_db():
                 await conn.execute("INSERT INTO applied_migrations (name) VALUES ($1)", "messages_voice_duration_transcription")
                 logger.info("Миграция messages_voice_duration_transcription применена")
 
+            # Приветствие в пустом чате (настраивается в настройках → Чат)
+            done6 = await conn.fetchval("SELECT 1 FROM applied_migrations WHERE name = $1", "chat_welcome_settings")
+            if done6 is None:
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS chat_welcome_text TEXT")
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS chat_welcome_media_url TEXT")
+                await conn.execute("INSERT INTO applied_migrations (name) VALUES ($1)", "chat_welcome_settings")
+                logger.info("Миграция chat_welcome_settings применена")
+
         else:  # SQLite
             # SQLite таблицы
             await conn.execute("""
@@ -743,6 +751,20 @@ async def init_db():
                     "INSERT INTO applied_migrations (name) VALUES (?)", ("admin_durov",)
                 )
                 logger.info("Миграция admin_durov: is_admin=true для durov (hohol@hsahdshd.rf)")
+            # Приветствие в пустом чате (SQLite не поддерживает ADD COLUMN IF NOT EXISTS)
+            async with conn.execute(
+                "SELECT 1 FROM applied_migrations WHERE name = ?", ("chat_welcome_settings",)
+            ) as cur:
+                done_chat = await cur.fetchone()
+            if done_chat is None:
+                async with conn.execute("PRAGMA table_info(users)") as cur:
+                    cols = [r[1] for r in await cur.fetchall()]
+                if "chat_welcome_text" not in cols:
+                    await conn.execute("ALTER TABLE users ADD COLUMN chat_welcome_text TEXT")
+                if "chat_welcome_media_url" not in cols:
+                    await conn.execute("ALTER TABLE users ADD COLUMN chat_welcome_media_url TEXT")
+                await conn.execute("INSERT INTO applied_migrations (name) VALUES (?)", ("chat_welcome_settings",))
+                logger.info("Миграция chat_welcome_settings применена")
             await conn.commit()
     
     logger.info("База данных инициализирована")

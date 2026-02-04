@@ -126,6 +126,8 @@ class UserUpdate(BaseModel):
     community_description: Optional[str] = None
     hide_phone: Optional[bool] = None
     hide_email: Optional[bool] = None
+    chat_welcome_text: Optional[str] = None
+    chat_welcome_media_url: Optional[str] = None
 
 class UserSearchResponse(BaseModel):
     id: int
@@ -522,14 +524,14 @@ async def get_me(user_id: int = Depends(get_current_user_id)):
     async with get_db() as conn:
         if db_type == 'postgresql':
             row = await conn.fetchrow(
-                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, is_admin, is_banned, last_seen, hide_phone, hide_email FROM users WHERE id = $1",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, is_admin, is_banned, last_seen, hide_phone, hide_email, chat_welcome_text, chat_welcome_media_url FROM users WHERE id = $1",
                 user_id
             )
             if row:
                 row = dict(row)
         else:  # sqlite
             async with conn.execute(
-                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, is_admin, is_banned, last_seen, hide_phone, hide_email FROM users WHERE id = ?",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, is_admin, is_banned, last_seen, hide_phone, hide_email, chat_welcome_text, chat_welcome_media_url FROM users WHERE id = ?",
                 (user_id,)
             ) as cursor:
                 row_data = await cursor.fetchone()
@@ -553,6 +555,8 @@ async def get_me(user_id: int = Depends(get_current_user_id)):
                         "last_seen": row_data[15] if len(row_data) > 15 else None,
                         "hide_phone": bool(row_data[16]) if len(row_data) > 16 else False,
                         "hide_email": bool(row_data[17]) if len(row_data) > 17 else False,
+                        "chat_welcome_text": row_data[18] if len(row_data) > 18 else None,
+                        "chat_welcome_media_url": row_data[19] if len(row_data) > 19 else None,
                     }
                 else:
                     row = None
@@ -963,6 +967,20 @@ async def update_me(data: UserUpdate, user_id: int = Depends(get_current_user_id
         else:
             updates.append("hide_email = ?")
         values.append(data.hide_email)
+    if data.chat_welcome_text is not None:
+        if db_type == 'postgresql':
+            updates.append(f"chat_welcome_text = ${param_num}")
+            param_num += 1
+        else:
+            updates.append("chat_welcome_text = ?")
+        values.append(data.chat_welcome_text)
+    if data.chat_welcome_media_url is not None:
+        if db_type == 'postgresql':
+            updates.append(f"chat_welcome_media_url = ${param_num}")
+            param_num += 1
+        else:
+            updates.append("chat_welcome_media_url = ?")
+        values.append(data.chat_welcome_media_url)
     
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
@@ -2202,6 +2220,106 @@ async def list_conversations(user_id: int = Depends(get_current_user_id)):
                 if key in r and r[key] is not None and hasattr(r[key], "isoformat"):
                     r[key] = _datetime_to_iso_utc(r[key])
         return rows
+
+
+class ConversationWithUser(BaseModel):
+    to_user_id: int
+
+
+@api_router.post("/conversations/with")
+async def get_or_create_conversation_with(data: ConversationWithUser, user_id: int = Depends(get_current_user_id)):
+    """Получить или создать диалог с пользователем (без отправки сообщения)."""
+    to_user = data.to_user_id
+    if to_user == user_id:
+        raise HTTPException(status_code=400, detail="Cannot start conversation with yourself")
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            row = await conn.fetchrow(
+                """
+                SELECT c.id FROM conversations c
+                JOIN conversation_participants p1 ON p1.conversation_id=c.id AND p1.user_id=$1
+                JOIN conversation_participants p2 ON p2.conversation_id=c.id AND p2.user_id=$2
+                WHERE c.is_group = FALSE
+                LIMIT 1
+                """,
+                user_id, to_user
+            )
+            if row:
+                conversation_id = row['id']
+            else:
+                conversation_id = await conn.fetchval("INSERT INTO conversations (is_group) VALUES (FALSE) RETURNING id")
+                await conn.execute("INSERT INTO conversation_participants (conversation_id, user_id) VALUES ($1, $2)", conversation_id, user_id)
+                await conn.execute("INSERT INTO conversation_participants (conversation_id, user_id) VALUES ($1, $2)", conversation_id, to_user)
+            # Формат как в list_conversations для одного диалога
+            other = await conn.fetchrow(
+                "SELECT id, username, avatar_url FROM users WHERE id = $1", to_user
+            )
+            last_msg = await conn.fetchrow(
+                """SELECT content, created_at, sender_id FROM messages
+                   WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 1""",
+                conversation_id
+            )
+            conv = {
+                "id": conversation_id,
+                "is_group": False,
+                "created_at": None,
+                "other_user_id": other['id'] if other else to_user,
+                "other_username": other['username'] if other else None,
+                "other_avatar": other['avatar_url'] if other else None,
+                "last_message": last_msg['content'] if last_msg else None,
+                "last_message_at": last_msg['created_at'] if last_msg else None,
+                "last_message_sender_id": last_msg['sender_id'] if last_msg else None,
+            }
+            if conv["created_at"] is None:
+                crow = await conn.fetchrow("SELECT created_at FROM conversations WHERE id = $1", conversation_id)
+                if crow:
+                    conv["created_at"] = _datetime_to_iso_utc(crow['created_at']) if crow.get('created_at') else None
+            if conv.get("last_message_at") and hasattr(conv["last_message_at"], "isoformat"):
+                conv["last_message_at"] = _datetime_to_iso_utc(conv["last_message_at"])
+        else:  # sqlite
+            async with conn.execute(
+                """
+                SELECT c.id FROM conversations c
+                JOIN conversation_participants p1 ON p1.conversation_id=c.id AND p1.user_id=?
+                JOIN conversation_participants p2 ON p2.conversation_id=c.id AND p2.user_id=?
+                WHERE c.is_group=0
+                LIMIT 1
+                """,
+                (user_id, to_user)
+            ) as cursor:
+                row = await cursor.fetchone()
+            if row:
+                conversation_id = row[0]
+            else:
+                cur = await conn.execute("INSERT INTO conversations (is_group) VALUES (0)", ())
+                conversation_id = cur.lastrowid
+                await conn.commit()
+                await conn.execute("INSERT INTO conversation_participants (conversation_id, user_id) VALUES (?, ?)", (conversation_id, user_id))
+                await conn.execute("INSERT INTO conversation_participants (conversation_id, user_id) VALUES (?, ?)", (conversation_id, to_user))
+                await conn.commit()
+            async with conn.execute("SELECT id, username, avatar_url FROM users WHERE id = ?", (to_user,)) as cur:
+                other = await cur.fetchone()
+            async with conn.execute(
+                "SELECT content, created_at, sender_id FROM messages WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 1",
+                (conversation_id,)
+            ) as cur:
+                last_msg = await cur.fetchone()
+            async with conn.execute("SELECT created_at FROM conversations WHERE id = ?", (conversation_id,)) as cur:
+                crow = await cur.fetchone()
+            conv = {
+                "id": conversation_id,
+                "is_group": False,
+                "created_at": _datetime_to_iso_utc(crow[0]) if crow and crow[0] else None,
+                "other_user_id": other[0] if other else to_user,
+                "other_username": other[1] if other else None,
+                "other_avatar": other[2] if other else None,
+                "last_message": last_msg[0] if last_msg else None,
+                "last_message_at": _datetime_to_iso_utc(last_msg[1]) if last_msg and last_msg[1] else None,
+                "last_message_sender_id": last_msg[2] if last_msg else None,
+            }
+        return {"conversation_id": conversation_id, "conversation": conv}
+
 
 @api_router.get("/conversations/{conversation_id}/messages")
 async def get_messages(conversation_id: int, user_id: int = Depends(get_current_user_id)):

@@ -86,13 +86,14 @@ const UserProfile = ({ username: usernameProp }) => {
     }
   };
 
-  const sendMessage = async () => {
+  const openChat = async () => {
     if (!user?.id) return;
     try {
-      await api.post('/messages/send', { to_user_id: user.id, content: 'Привет!' });
-      navigate('/messages');
+      const res = await api.post('/conversations/with', { to_user_id: user.id });
+      const convId = res.data?.conversation_id;
+      if (convId) navigate('/messages', { state: { openConversationId: convId } });
     } catch (e) {
-      const errorMsg = e.response?.data?.detail || 'Не удалось начать диалог';
+      const errorMsg = e.response?.data?.detail || 'Не удалось открыть чат';
       alert(errorMsg);
     }
   };
@@ -230,7 +231,7 @@ const UserProfile = ({ username: usernameProp }) => {
                 <div className="flex space-x-2">
                   {isFriend ? (
                     <>
-                      <Button variant="outline" onClick={sendMessage}>
+                      <Button variant="outline" onClick={openChat}>
                         <MessageCircle className="w-4 h-4 mr-2" />
                         Сообщение
                       </Button>

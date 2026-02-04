@@ -100,11 +100,9 @@ const FriendsPage = () => {
 
   const handleStartChat = async (userId) => {
     try {
-      await api.post('/messages/send', {
-        to_user_id: userId,
-        content: 'Привет!'
-      });
-      navigate('/messages');
+      const res = await api.post('/conversations/with', { to_user_id: userId });
+      const convId = res.data?.conversation_id;
+      if (convId) navigate('/messages', { state: { openConversationId: convId } });
     } catch (e) {
       console.error('Error starting chat:', e);
     }

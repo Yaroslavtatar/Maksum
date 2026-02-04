@@ -281,16 +281,13 @@ const MessagesPage = () => {
   const handleStartChat = async (userId) => {
     try {
       setSending(true);
-      const res = await api.post('/messages/send', {
-        to_user_id: userId,
-        content: 'Привет!'
-      });
-      // Обновляем список диалогов
-      await fetchConversations();
-      // Находим и открываем новый диалог
-      const updatedConvs = await api.get('/conversations');
-      const conv = updatedConvs.data.find(c => c.id === res.data.conversation_id);
+      const res = await api.post('/conversations/with', { to_user_id: userId });
+      const conv = res.data?.conversation;
       if (conv) {
+        setConversations(prev => {
+          const exists = prev.some(c => c.id === conv.id);
+          return exists ? prev : [conv, ...prev];
+        });
         setSelectedConversation(conv);
         await fetchMessages(conv.id);
       }
@@ -436,8 +433,21 @@ const MessagesPage = () => {
                 className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-2 min-h-0 w-full"
               >
                 {messages.length === 0 ? (
-                  <div className="flex items-center justify-center h-full">
-                    <p className="text-muted-foreground">Начните общение!</p>
+                  <div className="flex items-center justify-center h-full min-h-[200px]">
+                    <div className="max-w-md w-full mx-auto rounded-2xl px-4 py-5 bg-muted/60 text-center shadow-sm">
+                      <p className="text-base font-semibold text-foreground whitespace-pre-wrap">
+                        {user?.chat_welcome_text?.trim() || 'Приветствую!\nПишите сразу по сути обращения пожалуйста 🙏'}
+                      </p>
+                      {user?.chat_welcome_media_url?.trim() && (
+                        <div className="mt-4 rounded-lg overflow-hidden bg-black/5">
+                          {/\.(gif|webp|png|jpe?g)$/i.test(user.chat_welcome_media_url) ? (
+                            <img src={user.chat_welcome_media_url} alt="" className="w-full max-h-64 object-contain" />
+                          ) : (
+                            <video src={user.chat_welcome_media_url} className="w-full max-h-64 object-contain" controls loop muted playsInline />
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 ) : (
                   messages.map((msg) => (

@@ -12,6 +12,7 @@ import { Separator } from '../components/ui/separator';
 import { Avatar, AvatarFallback, AvatarImage } from '../components/ui/avatar';
 import api from '../api/axios';
 import { useTheme } from '../hooks/useTheme';
+import { useUser } from '../context/UserContext';
 import {
   User,
   Lock,
@@ -35,12 +36,14 @@ import {
   Sun,
   Moon,
   Circle,
-  Monitor
+  Monitor,
+  MessageCircle
 } from 'lucide-react';
 
 const SettingsPage = () => {
   const [activeTab, setActiveTab] = useState('profile');
   const { theme, changeTheme } = useTheme();
+  const { fetchUser } = useUser();
   const [settings, setSettings] = useState({
     username: '',
     email: '',
@@ -77,7 +80,10 @@ const SettingsPage = () => {
     theme: 'light',
     
     // Applications
-    connectedApps: []
+    connectedApps: [],
+    // Чат: приветствие в пустом чате
+    chat_welcome_text: '',
+    chat_welcome_media_url: ''
   });
   const [devices, setDevices] = useState([]);
   const [devicesLoading, setDevicesLoading] = useState(false);
@@ -96,6 +102,8 @@ const SettingsPage = () => {
           avatar_url: d.avatar_url || '',
           hide_phone: !!d.hide_phone,
           hide_email: !!d.hide_email,
+          chat_welcome_text: d.chat_welcome_text ?? '',
+          chat_welcome_media_url: d.chat_welcome_media_url ?? '',
         }));
       } catch (e) {}
     })();
@@ -276,6 +284,60 @@ const SettingsPage = () => {
                   <Button onClick={handleSave}>
                     <Save className="w-4 h-4 mr-2" />
                     Сохранить изменения
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Chat — приветствие в пустом чате */}
+          <TabsContent value="chat" className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>Приветствие в новом чате</CardTitle>
+                <CardDescription>
+                  Текст и медиа по центру пустого чата, когда собеседник ещё не написал. Увидят только те, кто открывает с вами диалог.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="space-y-2">
+                  <Label htmlFor="chat_welcome_text">Текст приветствия</Label>
+                  <Textarea
+                    id="chat_welcome_text"
+                    value={settings.chat_welcome_text}
+                    onChange={(e) => handleChange('chat_welcome_text', e.target.value)}
+                    placeholder={'Приветствую!\nПишите сразу по сути обращения пожалуйста 🙏'}
+                    rows={4}
+                    className="resize-none"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="chat_welcome_media_url">Ссылка на картинку или видео (GIF)</Label>
+                  <Input
+                    id="chat_welcome_media_url"
+                    type="url"
+                    value={settings.chat_welcome_media_url}
+                    onChange={(e) => handleChange('chat_welcome_media_url', e.target.value)}
+                    placeholder="https://..."
+                  />
+                </div>
+                <div className="flex justify-end pt-2">
+                  <Button
+                    onClick={async () => {
+                      try {
+                        await api.put('/users/me', {
+                          chat_welcome_text: settings.chat_welcome_text || null,
+                          chat_welcome_media_url: settings.chat_welcome_media_url?.trim() || null,
+                        });
+                        await fetchUser();
+                        alert('Настройки чата сохранены');
+                      } catch (e) {
+                        alert('Не удалось сохранить');
+                      }
+                    }}
+                  >
+                    <Save className="w-4 h-4 mr-2" />
+                    Сохранить
                   </Button>
                 </div>
               </CardContent>
