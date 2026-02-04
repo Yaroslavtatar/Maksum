@@ -110,7 +110,7 @@ const SettingsPage = () => {
   }, []);
 
   useEffect(() => {
-    if (activeTab !== 'security') return;
+    if (activeTab !== 'security' && activeTab !== 'apps') return;
     let cancelled = false;
     setDevicesLoading(true);
     api.get('/users/me/devices')
@@ -922,7 +922,10 @@ const SettingsPage = () => {
                           <div className="min-w-0">
                             <p className="font-medium truncate">{d.name || 'Устройство'}</p>
                             <p className="text-xs text-muted-foreground">
-                              Последняя активность: {d.last_used_at ? new Date(d.last_used_at).toLocaleString('ru') : '—'}
+                              {d.last_ip && <span>IP: {d.last_ip} · </span>}
+                              Вход: {d.created_at ? new Date(d.created_at).toLocaleString('ru') : '—'}
+                              {' · '}
+                              Активность: {d.last_used_at ? new Date(d.last_used_at).toLocaleString('ru') : '—'}
                             </p>
                           </div>
                           <Button
@@ -983,6 +986,83 @@ const SettingsPage = () => {
 
           {/* Applications Settings */}
           <TabsContent value="apps" className="space-y-6">
+            {/* Авторизованные устройства — сессии с устройств/браузеров */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Monitor className="w-5 h-5" />
+                  Авторизованные устройства
+                </CardTitle>
+                <CardDescription>
+                  Устройства и браузеры, с которых выполнялся вход. Можно отозвать сессию или отключить все кроме текущей.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {devicesLoading ? (
+                  <p className="text-sm text-muted-foreground py-4">Загрузка...</p>
+                ) : devices.length === 0 ? (
+                  <p className="text-sm text-muted-foreground py-4">Нет записей об устройствах. Войдите с другого браузера или устройства — они появятся здесь.</p>
+                ) : (
+                  <>
+                    <ul className="space-y-3">
+                      {devices.map((d) => (
+                        <li key={d.id} className="flex items-center justify-between gap-4 p-4 border rounded-lg">
+                          <div className="min-w-0 flex-1">
+                            <p className="font-medium truncate">{d.name || 'Устройство'}</p>
+                            {d.user_agent && (
+                              <p className="text-xs text-muted-foreground truncate mt-0.5" title={d.user_agent}>
+                                {d.user_agent.length > 60 ? d.user_agent.slice(0, 60) + '…' : d.user_agent}
+                              </p>
+                            )}
+                            <p className="text-xs text-muted-foreground mt-1">
+                              {d.last_ip && <span>IP: {d.last_ip} · </span>}
+                              Вход: {d.created_at ? new Date(d.created_at).toLocaleString('ru') : '—'}
+                              {' · '}
+                              Активность: {d.last_used_at ? new Date(d.last_used_at).toLocaleString('ru') : '—'}
+                            </p>
+                          </div>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={revokingId === d.id}
+                            onClick={async () => {
+                              setRevokingId(d.id);
+                              try {
+                                await api.delete(`/users/me/devices/${d.id}`);
+                                setDevices((prev) => prev.filter((x) => x.id !== d.id));
+                              } catch (e) {
+                                alert('Не удалось отозвать устройство');
+                              } finally {
+                                setRevokingId(null);
+                              }
+                            }}
+                          >
+                            {revokingId === d.id ? '...' : 'Отключить'}
+                          </Button>
+                        </li>
+                      ))}
+                    </ul>
+                    {devices.length > 1 && currentDeviceId && (
+                      <Button
+                        variant="outline"
+                        className="w-full sm:w-auto"
+                        onClick={async () => {
+                          try {
+                            await api.delete('/users/me/devices/others');
+                            setDevices((prev) => prev.filter((d) => String(d.id) === currentDeviceId));
+                          } catch (e) {
+                            alert(e?.response?.data?.detail || 'Не удалось отозвать другие устройства');
+                          }
+                        }}
+                      >
+                        Отключить все сессии кроме этой
+                      </Button>
+                    )}
+                  </>
+                )}
+              </CardContent>
+            </Card>
+
             <Card>
               <CardHeader>
                 <CardTitle>Подключенные приложения</CardTitle>

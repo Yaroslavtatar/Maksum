@@ -110,6 +110,7 @@ class DeviceInfo(BaseModel):
     user_agent: Optional[str]
     last_used_at: Optional[str]
     created_at: str
+    last_ip: Optional[str] = None
 
 class UserUpdate(BaseModel):
     username: Optional[str] = None
@@ -427,10 +428,18 @@ async def register_user(data: RegisterInput):
             user_id = cursor.lastrowid
             return UserPublic(id=user_id, username=data.username, email=data.email, avatar_url=None)
 
+def _client_ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For") or ""
+    if xff:
+        return xff.split(",")[0].strip() or (request.client.host if request.client else "")
+    return request.client.host if request.client else ""
+
+
 @api_router.post("/auth/login", response_model=TokenResponse)
 async def login_user(request: Request, data: LoginInput):
     db_type = get_db_type()
     user_agent = request.headers.get("user-agent") or ""
+    client_ip = _client_ip(request)[:45]
     async with get_db() as conn:
         if db_type == 'postgresql':
             row = await conn.fetchrow(
@@ -469,11 +478,14 @@ async def login_user(request: Request, data: LoginInput):
             )
             if existing:
                 device_id = existing["id"]
-                await conn.execute("UPDATE user_devices SET last_used_at = NOW(), name = $1 WHERE id = $2", name, device_id)
+                await conn.execute(
+                    "UPDATE user_devices SET last_used_at = NOW(), name = $1, last_ip = $2 WHERE id = $3",
+                    name, client_ip or None, device_id
+                )
             else:
                 device_id = await conn.fetchval(
-                    "INSERT INTO user_devices (user_id, name, user_agent) VALUES ($1, $2, $3) RETURNING id",
-                    user["id"], name, ua_stored if ua_stored else None
+                    "INSERT INTO user_devices (user_id, name, user_agent, last_ip) VALUES ($1, $2, $3, $4) RETURNING id",
+                    user["id"], name, ua_stored if ua_stored else None, client_ip or None
                 )
         else:
             async with conn.execute(
@@ -483,12 +495,15 @@ async def login_user(request: Request, data: LoginInput):
                 row = await cur.fetchone()
             if row:
                 device_id = row[0]
-                await conn.execute("UPDATE user_devices SET last_used_at = datetime('now'), name = ? WHERE id = ?", (name, device_id))
+                await conn.execute(
+                    "UPDATE user_devices SET last_used_at = datetime('now'), name = ?, last_ip = ? WHERE id = ?",
+                    (name, client_ip or None, device_id)
+                )
                 await conn.commit()
             else:
                 cursor = await conn.execute(
-                    "INSERT INTO user_devices (user_id, name, user_agent) VALUES (?, ?, ?)",
-                    (user["id"], name, ua_stored if ua_stored else None)
+                    "INSERT INTO user_devices (user_id, name, user_agent, last_ip) VALUES (?, ?, ?, ?)",
+                    (user["id"], name, ua_stored if ua_stored else None, client_ip or None)
                 )
                 await conn.commit()
                 device_id = cursor.lastrowid
@@ -591,6 +606,7 @@ async def register_current_device(
     user_agent = request.headers.get("user-agent") or ""
     ua_stored = (user_agent[:1024] if user_agent else "") or ""
     name = (user_agent[:255] if user_agent else "Устройство") or "Устройство"
+    client_ip = _client_ip(request)[:45]
     db_type = get_db_type()
     async with get_db() as conn:
         if db_type == 'postgresql':
@@ -600,11 +616,14 @@ async def register_current_device(
             )
             if existing:
                 device_id = existing["id"]
-                await conn.execute("UPDATE user_devices SET last_used_at = NOW(), name = $1 WHERE id = $2", name, device_id)
+                await conn.execute(
+                    "UPDATE user_devices SET last_used_at = NOW(), name = $1, last_ip = $2 WHERE id = $3",
+                    name, client_ip or None, device_id
+                )
             else:
                 device_id = await conn.fetchval(
-                    "INSERT INTO user_devices (user_id, name, user_agent) VALUES ($1, $2, $3) RETURNING id",
-                    user_id, name, ua_stored if ua_stored else None
+                    "INSERT INTO user_devices (user_id, name, user_agent, last_ip) VALUES ($1, $2, $3, $4) RETURNING id",
+                    user_id, name, ua_stored if ua_stored else None, client_ip or None
                 )
         else:
             async with conn.execute(
@@ -614,12 +633,15 @@ async def register_current_device(
                 row = await cur.fetchone()
             if row:
                 device_id = row[0]
-                await conn.execute("UPDATE user_devices SET last_used_at = datetime('now'), name = ? WHERE id = ?", (name, device_id))
+                await conn.execute(
+                    "UPDATE user_devices SET last_used_at = datetime('now'), name = ?, last_ip = ? WHERE id = ?",
+                    (name, client_ip or None, device_id)
+                )
                 await conn.commit()
             else:
                 cursor = await conn.execute(
-                    "INSERT INTO user_devices (user_id, name, user_agent) VALUES (?, ?, ?)",
-                    (user_id, name, ua_stored if ua_stored else None)
+                    "INSERT INTO user_devices (user_id, name, user_agent, last_ip) VALUES (?, ?, ?, ?)",
+                    (user_id, name, ua_stored if ua_stored else None, client_ip or None)
                 )
                 await conn.commit()
                 device_id = cursor.lastrowid
@@ -633,7 +655,7 @@ async def list_my_devices(user_id: int = Depends(get_current_user_id)):
     async with get_db() as conn:
         if db_type == 'postgresql':
             rows = await conn.fetch(
-                "SELECT id, name, user_agent, last_used_at, created_at FROM user_devices WHERE user_id = $1 ORDER BY last_used_at DESC",
+                "SELECT id, name, user_agent, last_used_at, created_at, last_ip FROM user_devices WHERE user_id = $1 ORDER BY last_used_at DESC",
                 user_id
             )
             out = [
@@ -643,12 +665,13 @@ async def list_my_devices(user_id: int = Depends(get_current_user_id)):
                     user_agent=r["user_agent"],
                     last_used_at=r["last_used_at"].isoformat() if r["last_used_at"] else None,
                     created_at=r["created_at"].isoformat() if r["created_at"] else "",
+                    last_ip=r.get("last_ip"),
                 )
                 for r in rows
             ]
         else:
             async with conn.execute(
-                "SELECT id, name, user_agent, last_used_at, created_at FROM user_devices WHERE user_id = ? ORDER BY last_used_at DESC",
+                "SELECT id, name, user_agent, last_used_at, created_at, last_ip FROM user_devices WHERE user_id = ? ORDER BY last_used_at DESC",
                 (user_id,)
             ) as cursor:
                 rows = await cursor.fetchall()
@@ -659,6 +682,7 @@ async def list_my_devices(user_id: int = Depends(get_current_user_id)):
                     user_agent=r[2],
                     last_used_at=r[3].isoformat() if getattr(r[3], "isoformat", None) else str(r[3]) if r[3] else None,
                     created_at=r[4].isoformat() if getattr(r[4], "isoformat", None) else str(r[4]) if r[4] else "",
+                    last_ip=r[5] if len(r) > 5 else None,
                 )
                 for r in rows
             ]

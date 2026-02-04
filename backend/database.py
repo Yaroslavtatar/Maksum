@@ -478,6 +478,13 @@ async def init_db():
                 await conn.execute("INSERT INTO applied_migrations (name) VALUES ($1)", "chat_welcome_settings")
                 logger.info("Миграция chat_welcome_settings применена")
 
+            # IP в устройствах (для отображения в настройках)
+            done7 = await conn.fetchval("SELECT 1 FROM applied_migrations WHERE name = $1", "user_devices_last_ip")
+            if done7 is None:
+                await conn.execute("ALTER TABLE user_devices ADD COLUMN IF NOT EXISTS last_ip VARCHAR(45)")
+                await conn.execute("INSERT INTO applied_migrations (name) VALUES ($1)", "user_devices_last_ip")
+                logger.info("Миграция user_devices_last_ip применена")
+
         else:  # SQLite
             # SQLite таблицы
             await conn.execute("""
@@ -765,6 +772,18 @@ async def init_db():
                     await conn.execute("ALTER TABLE users ADD COLUMN chat_welcome_media_url TEXT")
                 await conn.execute("INSERT INTO applied_migrations (name) VALUES (?)", ("chat_welcome_settings",))
                 logger.info("Миграция chat_welcome_settings применена")
+            # IP в устройствах
+            async with conn.execute(
+                "SELECT 1 FROM applied_migrations WHERE name = ?", ("user_devices_last_ip",)
+            ) as cur:
+                done_ip = await cur.fetchone()
+            if done_ip is None:
+                async with conn.execute("PRAGMA table_info(user_devices)") as cur:
+                    cols = [r[1] for r in await cur.fetchall()]
+                if "last_ip" not in cols:
+                    await conn.execute("ALTER TABLE user_devices ADD COLUMN last_ip VARCHAR(45)")
+                await conn.execute("INSERT INTO applied_migrations (name) VALUES (?)", ("user_devices_last_ip",))
+                logger.info("Миграция user_devices_last_ip применена")
             await conn.commit()
     
     logger.info("База данных инициализирована")
