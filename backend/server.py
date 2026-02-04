@@ -142,6 +142,7 @@ class MessageSend(BaseModel):
     to_user_id: Optional[int] = None
     content: str = ""
     voice_base64: Optional[str] = None  # data:audio/ogg;base64,... для голосовых
+    voice_duration_seconds: Optional[float] = None  # длительность в секундах (как в Telegram)
 
 # Post Models
 class PostCreate(BaseModel):
@@ -259,6 +260,16 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALG)
+
+def _datetime_to_iso_utc(dt):
+    """Сериализация времени в ISO с Z (UTC), чтобы на клиенте отображалось в часовом поясе пользователя."""
+    if dt is None:
+        return None
+    if getattr(dt, "isoformat", None) is None:
+        return dt
+    if getattr(dt, "tzinfo", None) is None:
+        return dt.isoformat() + "Z"
+    return dt.isoformat().replace("+00:00", "Z")
 
 def get_status_from_last_seen(last_seen) -> str:
     """online = последние 5 мин, inactive = 5–30 мин, offline = >30 мин или NULL."""
@@ -2186,6 +2197,10 @@ async def list_conversations(user_id: int = Depends(get_current_user_id)):
                     }
                     for r in rows_data
                 ]
+        for r in rows:
+            for key in ("created_at", "last_message_at"):
+                if key in r and r[key] is not None and hasattr(r[key], "isoformat"):
+                    r[key] = _datetime_to_iso_utc(r[key])
         return rows
 
 @api_router.get("/conversations/{conversation_id}/messages")
@@ -2210,14 +2225,16 @@ async def get_messages(conversation_id: int, user_id: int = Depends(get_current_
         
         if db_type == 'postgresql':
             rows = await conn.fetch(
-                "SELECT id, sender_id, content, created_at, voice_url FROM messages WHERE conversation_id=$1 ORDER BY created_at ASC LIMIT 500",
+                """SELECT id, sender_id, content, created_at, voice_url, voice_duration_seconds, voice_transcription
+                   FROM messages WHERE conversation_id=$1 ORDER BY created_at ASC LIMIT 500""",
                 conversation_id
             )
             rows = [dict(r) for r in rows]
         else:  # sqlite
             try:
                 async with conn.execute(
-                    "SELECT id, sender_id, content, created_at, voice_url FROM messages WHERE conversation_id=? ORDER BY created_at ASC LIMIT 500",
+                    """SELECT id, sender_id, content, created_at, voice_url, voice_duration_seconds, voice_transcription
+                       FROM messages WHERE conversation_id=? ORDER BY created_at ASC LIMIT 500""",
                     (conversation_id,)
                 ) as cursor:
                     rows_data = await cursor.fetchall()
@@ -2227,20 +2244,26 @@ async def get_messages(conversation_id: int, user_id: int = Depends(get_current_
                             "sender_id": r[1],
                             "content": r[2],
                             "created_at": r[3],
-                            "voice_url": r[4] if len(r) > 4 else None
+                            "voice_url": r[4] if len(r) > 4 else None,
+                            "voice_duration_seconds": r[5] if len(r) > 5 else None,
+                            "voice_transcription": r[6] if len(r) > 6 else None,
                         }
                         for r in rows_data
                     ]
             except Exception:
                 async with conn.execute(
-                    "SELECT id, sender_id, content, created_at FROM messages WHERE conversation_id=? ORDER BY created_at ASC LIMIT 500",
+                    "SELECT id, sender_id, content, created_at, voice_url FROM messages WHERE conversation_id=? ORDER BY created_at ASC LIMIT 500",
                     (conversation_id,)
                 ) as cursor:
                     rows_data = await cursor.fetchall()
                     rows = [
-                        {"id": r[0], "sender_id": r[1], "content": r[2], "created_at": r[3], "voice_url": None}
+                        {"id": r[0], "sender_id": r[1], "content": r[2], "created_at": r[3], "voice_url": r[4] if len(r) > 4 else None,
+                         "voice_duration_seconds": None, "voice_transcription": None}
                         for r in rows_data
                     ]
+        for r in rows:
+            if r.get("created_at") is not None and hasattr(r["created_at"], "isoformat"):
+                r["created_at"] = _datetime_to_iso_utc(r["created_at"])
         return rows
 
 @api_router.post("/messages/send")
@@ -2318,11 +2341,13 @@ async def send_message(data: MessageSend, user_id: int = Depends(get_current_use
         if data.voice_base64:
             content_text = content_text or "[Голосовое сообщение]"
         voice_url = data.voice_base64 if data.voice_base64 else None
+        voice_dur = float(data.voice_duration_seconds) if data.voice_duration_seconds is not None else None
 
         if db_type == 'postgresql':
             await conn.execute(
-                "INSERT INTO messages (conversation_id, sender_id, content, voice_url) VALUES ($1, $2, $3, $4)",
-                conversation_id, user_id, content_text, voice_url
+                """INSERT INTO messages (conversation_id, sender_id, content, voice_url, voice_duration_seconds)
+                   VALUES ($1, $2, $3, $4, $5)""",
+                conversation_id, user_id, content_text, voice_url, voice_dur
             )
             # Получаем участников диалога для создания уведомлений
             participants = await conn.fetch(
@@ -2331,8 +2356,9 @@ async def send_message(data: MessageSend, user_id: int = Depends(get_current_use
             )
         else:  # sqlite
             await conn.execute(
-                "INSERT INTO messages (conversation_id, sender_id, content, voice_url) VALUES (?, ?, ?, ?)",
-                (conversation_id, user_id, content_text, voice_url)
+                """INSERT INTO messages (conversation_id, sender_id, content, voice_url, voice_duration_seconds)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (conversation_id, user_id, content_text, voice_url, voice_dur)
             )
             await conn.commit()
             # Получаем участников диалога для создания уведомлений

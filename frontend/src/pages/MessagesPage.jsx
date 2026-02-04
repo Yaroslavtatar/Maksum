@@ -15,8 +15,104 @@ import {
   Send,
   Loader2,
   Mic,
-  Square
+  Square,
+  Play,
+  Pause
 } from 'lucide-react';
+
+// Формат длительности в минутах:секундах
+const formatDuration = (seconds) => {
+  if (seconds == null || isNaN(seconds)) return '0:00';
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+};
+
+// Голосовое сообщение как в Telegram: play, длительность, прогресс, транскрипция
+const VoiceBubble = ({ src, isOwn, time, durationSeconds: propDuration, transcription }) => {
+  const audioRef = useRef(null);
+  const [playing, setPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(propDuration != null ? propDuration : null);
+
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el) return;
+    const onEnded = () => { setPlaying(false); setCurrentTime(0); };
+    const onPause = () => setPlaying(false);
+    const onPlay = () => setPlaying(true);
+    const onTimeUpdate = () => setCurrentTime(el.currentTime);
+    const onLoadedMetadata = () => {
+      if (duration == null) setDuration(el.duration);
+    };
+    el.addEventListener('ended', onEnded);
+    el.addEventListener('pause', onPause);
+    el.addEventListener('play', onPlay);
+    el.addEventListener('timeupdate', onTimeUpdate);
+    el.addEventListener('loadedmetadata', onLoadedMetadata);
+    return () => {
+      el.removeEventListener('ended', onEnded);
+      el.removeEventListener('pause', onPause);
+      el.removeEventListener('play', onPlay);
+      el.removeEventListener('timeupdate', onTimeUpdate);
+      el.removeEventListener('loadedmetadata', onLoadedMetadata);
+    };
+  }, [src, duration]);
+
+  useEffect(() => {
+    if (propDuration != null) setDuration(propDuration);
+  }, [propDuration]);
+
+  const togglePlay = () => {
+    const el = audioRef.current;
+    if (!el) return;
+    if (playing) el.pause();
+    else el.play();
+  };
+
+  const totalSec = duration != null && !isNaN(duration) ? duration : 0;
+  const durStr = formatDuration(totalSec);
+  const progress = totalSec > 0 ? Math.min(1, currentTime / totalSec) : 0;
+
+  return (
+    <div className="flex items-center gap-2 min-w-0">
+      <audio ref={audioRef} src={src} preload="metadata" />
+      <button
+        type="button"
+        onClick={togglePlay}
+        className={`shrink-0 w-10 h-10 rounded-full flex items-center justify-center transition-opacity hover:opacity-90 ${
+          isOwn ? 'bg-primary-foreground/20 text-primary-foreground' : 'bg-muted-foreground/20 text-foreground'
+        }`}
+      >
+        {playing ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
+      </button>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm font-medium">Голосовое</span>
+          <span className={`text-[11px] shrink-0 ${isOwn ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
+            {formatDuration(currentTime)} / {durStr} · {time}
+          </span>
+        </div>
+        <div className="h-1 rounded-full bg-black/10 mt-1.5 overflow-hidden">
+          <div
+            className={`h-full rounded-full transition-all ${isOwn ? 'bg-primary-foreground/40' : 'bg-muted-foreground/40'}`}
+            style={{ width: `${progress * 100}%` }}
+          />
+        </div>
+        {transcription && (
+          <div className="mt-2 pt-2 border-t border-black/10">
+            <p className="text-xs opacity-90 whitespace-pre-wrap break-words">{transcription}</p>
+          </div>
+        )}
+        {!transcription && (
+          <p className="mt-1.5 text-[11px] opacity-70 flex items-center gap-1">
+            <span className="font-medium">&gt;A</span> Транскрипция (скоро)
+          </p>
+        )}
+      </div>
+    </div>
+  );
+};
 
 const MessagesPage = () => {
   const location = useLocation();
@@ -31,6 +127,8 @@ const MessagesPage = () => {
   const [sending, setSending] = useState(false);
   const [recording, setRecording] = useState(false);
   const [recordingStopping, setRecordingStopping] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const recordingTimerRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const { user } = useUser();
   const messagesEndRef = useRef(null);
@@ -115,36 +213,57 @@ const MessagesPage = () => {
       const chunks = [];
       recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
       recorder.onstop = async () => {
+        if (recordingTimerRef.current) {
+          clearInterval(recordingTimerRef.current);
+          recordingTimerRef.current = null;
+        }
+        setRecordingSeconds(0);
         stream.getTracks().forEach((t) => t.stop());
         if (chunks.length === 0) {
           setRecordingStopping(false);
           return;
         }
         const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
-        const reader = new FileReader();
-        reader.onloadend = async () => {
-          const base64 = reader.result;
-          setSending(true);
-          try {
-            await api.post('/messages/send', {
-              conversation_id: selectedConversation.id,
-              content: '[Голосовое сообщение]',
-              voice_base64: base64
-            });
-            await fetchMessages(selectedConversation.id);
-            await fetchConversations();
-          } catch (err) {
-            console.error('Error sending voice:', err);
-          } finally {
-            setSending(false);
-            setRecordingStopping(false);
-          }
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audio.onloadedmetadata = async () => {
+          const durationSec = audio.duration;
+          URL.revokeObjectURL(url);
+          const reader = new FileReader();
+          reader.onloadend = async () => {
+            const base64 = reader.result;
+            setSending(true);
+            try {
+              await api.post('/messages/send', {
+                conversation_id: selectedConversation.id,
+                content: '[Голосовое сообщение]',
+                voice_base64: base64,
+                voice_duration_seconds: Math.round(durationSec * 10) / 10
+              });
+              await fetchMessages(selectedConversation.id);
+              await fetchConversations();
+            } catch (err) {
+              console.error('Error sending voice:', err);
+            } finally {
+              setSending(false);
+              setRecordingStopping(false);
+            }
+          };
+          reader.readAsDataURL(blob);
         };
-        reader.readAsDataURL(blob);
+        audio.onerror = () => {
+          URL.revokeObjectURL(url);
+          setRecordingStopping(false);
+        };
+        audio.load();
       };
       mediaRecorderRef.current = recorder;
       recorder.start();
       setRecording(true);
+      setRecordingSeconds(0);
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingSeconds((s) => s + 1);
+      }, 1000);
     } catch (err) {
       console.error('Error starting recording:', err);
       alert('Нет доступа к микрофону');
@@ -187,20 +306,27 @@ const MessagesPage = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  const formatTime = (dateString) => {
+  // Время в пузыре сообщения — только часы:минуты (как в Telegram)
+  const formatMessageTime = (dateString) => {
     if (!dateString) return '';
-    const date = new Date(dateString);
-    const now = new Date();
-    const diff = now - date;
-    const minutes = Math.floor(diff / 60000);
-    const hours = Math.floor(diff / 3600000);
-    const days = Math.floor(diff / 86400000);
+    const d = new Date(dateString);
+    return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  };
 
-    if (minutes < 1) return 'только что';
-    if (minutes < 60) return `${minutes} мин назад`;
-    if (hours < 24) return `${hours} ч назад`;
-    if (days < 7) return `${days} дн назад`;
-    return date.toLocaleDateString('ru-RU');
+  // Время в списке диалогов: сегодня — "14:32", вчера — "вчера 14:32", иначе дата
+  const formatListTime = (dateString) => {
+    if (!dateString) return '';
+    const d = new Date(dateString);
+    const now = new Date();
+    const today = now.getDate() === d.getDate() && now.getMonth() === d.getMonth() && now.getFullYear() === d.getFullYear();
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const isYesterday = yesterday.getDate() === d.getDate() && yesterday.getMonth() === d.getMonth() && yesterday.getFullYear() === d.getFullYear();
+    const time = d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    if (today) return time;
+    if (isYesterday) return `вчера ${time}`;
+    if (now.getFullYear() === d.getFullYear()) return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+    return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'numeric', year: 'numeric' });
   };
 
   const filteredConversations = conversations.filter(conv => {
@@ -212,9 +338,9 @@ const MessagesPage = () => {
 
   return (
     <MainLayout>
-      <div className="h-[calc(100vh-7rem)] flex">
+      <div className="h-[calc(100vh-6rem)] flex min-h-0 max-w-full">
         {/* Chat List */}
-        <Card className="w-80 mr-4 flex flex-col animate-slide-right">
+        <Card className="w-80 shrink-0 mr-4 flex flex-col min-h-0 overflow-hidden">
           <CardHeader className="pb-3">
             <CardTitle className="text-lg">Сообщения</CardTitle>
             <div className="relative">
@@ -266,12 +392,19 @@ const MessagesPage = () => {
                         {conv.last_message && (
                           <p className="text-xs text-muted-foreground truncate">
                             {conv.last_message_sender_id === user?.id ? 'Вы: ' : ''}
-                            {conv.last_message}
+                            {conv.last_message === '[Голосовое сообщение]' ? (
+                              <span className="inline-flex items-center gap-1">
+                                <Mic className="w-3 h-3 shrink-0" />
+                                Голосовое
+                              </span>
+                            ) : (
+                              conv.last_message
+                            )}
                           </p>
                         )}
                         {conv.last_message_at && (
-                          <p className="text-xs text-muted-foreground mt-1">
-                            {formatTime(conv.last_message_at)}
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {formatListTime(conv.last_message_at)}
                           </p>
                         )}
                       </div>
@@ -285,8 +418,8 @@ const MessagesPage = () => {
 
         {/* Chat Window */}
         {selectedConversation ? (
-          <Card className="flex-1 flex flex-col animate-slide-left">
-            <CardHeader className="pb-3 border-b">
+          <Card className="flex-1 flex flex-col min-h-0 overflow-hidden min-w-0">
+            <CardHeader className="pb-3 border-b shrink-0">
               <div className="flex items-center space-x-3">
                 <Avatar>
                   <AvatarImage src={selectedConversation.other_avatar} alt={selectedConversation.other_username} />
@@ -297,10 +430,10 @@ const MessagesPage = () => {
                 </div>
               </div>
             </CardHeader>
-            <CardContent className="flex-1 flex flex-col p-0">
+            <CardContent className="flex-1 flex flex-col p-0 min-h-0 overflow-hidden">
               <div
                 ref={messagesContainerRef}
-                className="flex-1 overflow-y-auto p-4 space-y-4"
+                className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-2 min-h-0 w-full"
               >
                 {messages.length === 0 ? (
                   <div className="flex items-center justify-center h-full">
@@ -310,39 +443,49 @@ const MessagesPage = () => {
                   messages.map((msg) => (
                     <div
                       key={msg.id}
-                      className={`flex ${msg.sender_id === user?.id ? 'justify-end' : 'justify-start'}`}
+                      className={`flex ${msg.sender_id === user?.id ? 'justify-end' : 'justify-start'} shrink-0 animate-fade-in`}
                     >
                       <div
-                        className={`max-w-[70%] rounded-lg px-4 py-2 ${
+                        className={`max-w-[75%] min-w-0 rounded-2xl px-3 py-2 shadow-sm ${
                           msg.sender_id === user?.id
-                            ? 'bg-primary text-primary-foreground'
-                            : 'bg-muted'
+                            ? 'bg-primary text-primary-foreground rounded-br-md'
+                            : 'bg-muted rounded-bl-md'
                         }`}
                       >
                         {msg.voice_url ? (
-                          <div className="space-y-1">
-                            <audio controls src={msg.voice_url} className="max-w-full h-9" />
-                            <p className="text-xs opacity-80">Голосовое сообщение</p>
-                          </div>
+                          <VoiceBubble
+                            src={msg.voice_url}
+                            isOwn={msg.sender_id === user?.id}
+                            time={formatMessageTime(msg.created_at)}
+                            durationSeconds={msg.voice_duration_seconds}
+                            transcription={msg.voice_transcription}
+                          />
                         ) : (
-                          <p className="text-sm">{msg.content}</p>
+                          <>
+                            <p className="text-sm break-words whitespace-pre-wrap">{msg.content}</p>
+                            <p className={`text-[11px] mt-1 text-right ${
+                              msg.sender_id === user?.id ? 'text-primary-foreground/70' : 'text-muted-foreground'
+                            }`}>
+                              {formatMessageTime(msg.created_at)}
+                            </p>
+                          </>
                         )}
-                        <p className={`text-xs mt-1 ${
-                          msg.sender_id === user?.id ? 'text-primary-foreground/70' : 'text-muted-foreground'
-                        }`}>
-                          {formatTime(msg.created_at)}
-                        </p>
                       </div>
                     </div>
                   ))
                 )}
                 <div ref={messagesEndRef} />
               </div>
-              <form onSubmit={handleSendMessage} className="p-4 border-t flex items-center gap-2">
+              <form onSubmit={handleSendMessage} className="p-4 border-t flex items-center gap-2 shrink-0">
                 {recording ? (
-                  <Button type="button" variant="destructive" size="icon" onClick={stopRecording} disabled={recordingStopping} title="Остановить запись">
-                    <Square className="w-4 h-4 fill-current" />
-                  </Button>
+                  <>
+                    <Button type="button" variant="destructive" size="icon" onClick={stopRecording} disabled={recordingStopping} title="Остановить запись">
+                      <Square className="w-4 h-4 fill-current" />
+                    </Button>
+                    <span className="text-sm tabular-nums text-muted-foreground">
+                      {Math.floor(recordingSeconds / 60)}:{String(recordingSeconds % 60).padStart(2, '0')}
+                    </span>
+                  </>
                 ) : (
                   <Button type="button" variant="outline" size="icon" onClick={startRecording} disabled={sending} title="Голосовое сообщение">
                     <Mic className="w-4 h-4" />

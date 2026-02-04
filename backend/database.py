@@ -428,20 +428,18 @@ async def init_db():
                 EXECUTE FUNCTION update_updated_at_column();
             """)
 
-            # Одноразовая миграция: админы только durov и илья_новиков_65vsj
             await conn.execute("CREATE TABLE IF NOT EXISTS applied_migrations (name TEXT PRIMARY KEY)")
-            done = await conn.fetchval("SELECT 1 FROM applied_migrations WHERE name = $1", "reset_admins_durov_ilya")
-            if done is None:
+            # Одноразовая миграция: выдать админку пользователю durov (hohol@hsahdshd.rf)
+            done_admin = await conn.fetchval("SELECT 1 FROM applied_migrations WHERE name = $1", "admin_durov")
+            if done_admin is None:
                 await conn.execute(
-                    "UPDATE users SET is_admin = FALSE WHERE username IS NULL OR username NOT IN ('durov', 'илья_новиков_65vsj')"
+                    "UPDATE users SET is_admin = TRUE WHERE username = $1 AND email = $2",
+                    "durov", "hohol@hsahdshd.rf"
                 )
-                await conn.execute(
-                    "UPDATE users SET is_admin = TRUE WHERE username IN ('durov', 'илья_новиков_65vsj')"
-                )
-                await conn.execute("INSERT INTO applied_migrations (name) VALUES ($1)", "reset_admins_durov_ilya")
-                logger.info("Миграция reset_admins_durov_ilya применена: админы только durov, илья_новиков_65vsj")
+                await conn.execute("INSERT INTO applied_migrations (name) VALUES ($1)", "admin_durov")
+                logger.info("Миграция admin_durov: is_admin=true для durov (hohol@hsahdshd.rf)")
 
-            # Одноразовая миграция: avatar_url и cover_photo — TEXT (base64/длинные URL не влезают в VARCHAR(1024))
+            # avatar_url и cover_photo — TEXT (base64/длинные URL не влезают в VARCHAR(1024))
             done2 = await conn.fetchval("SELECT 1 FROM applied_migrations WHERE name = $1", "avatar_cover_to_text")
             if done2 is None:
                 await conn.execute("ALTER TABLE users ALTER COLUMN avatar_url TYPE TEXT")
@@ -464,18 +462,14 @@ async def init_db():
                 await conn.execute("INSERT INTO applied_migrations (name) VALUES ($1)", "messages_voice_url")
                 logger.info("Миграция messages_voice_url применена")
 
-            # Одноразовая миграция: выдать админку пользователю с логином из ADMIN_USERNAME
-            done_admin = await conn.fetchval("SELECT 1 FROM applied_migrations WHERE name = $1", "admin_grant_by_login")
-            if done_admin is None:
-                admin_login = (os.getenv("ADMIN_USERNAME") or os.getenv("ADMIN_LOGIN") or "").strip()
-                if admin_login:
-                    result = await conn.execute(
-                        "UPDATE users SET is_admin = TRUE WHERE username = $1",
-                        admin_login
-                    )
-                    await conn.execute("INSERT INTO applied_migrations (name) VALUES ($1)", "admin_grant_by_login")
-                    logger.info("Миграция admin_grant_by_login: is_admin=true для пользователя %s", admin_login)
-            
+            # Длительность голосовых и транскрипция
+            done5 = await conn.fetchval("SELECT 1 FROM applied_migrations WHERE name = $1", "messages_voice_duration_transcription")
+            if done5 is None:
+                await conn.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS voice_duration_seconds REAL")
+                await conn.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS voice_transcription TEXT")
+                await conn.execute("INSERT INTO applied_migrations (name) VALUES ($1)", "messages_voice_duration_transcription")
+                logger.info("Миграция messages_voice_duration_transcription применена")
+
         else:  # SQLite
             # SQLite таблицы
             await conn.execute("""
@@ -672,8 +666,14 @@ async def init_db():
                     await conn.execute("ALTER TABLE messages ADD COLUMN voice_url TEXT NULL")
                     await conn.commit()
                     logger.info("Миграция SQLite: messages.voice_url добавлена")
+                if 'voice_duration_seconds' not in msg_cols:
+                    await conn.execute("ALTER TABLE messages ADD COLUMN voice_duration_seconds REAL NULL")
+                    await conn.commit()
+                if 'voice_transcription' not in msg_cols:
+                    await conn.execute("ALTER TABLE messages ADD COLUMN voice_transcription TEXT NULL")
+                    await conn.commit()
             except Exception as e:
-                logger.warning(f"Миграция messages.voice_url (SQLite): {e}")
+                logger.warning(f"Миграция messages (SQLite): {e}")
 
             # Индексы SQLite
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
@@ -728,41 +728,21 @@ async def init_db():
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, is_read)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at)")
 
-            # Одноразовая миграция: админы только durov и илья_новиков_65vsj
             await conn.execute("CREATE TABLE IF NOT EXISTS applied_migrations (name TEXT PRIMARY KEY)")
+            # Одноразовая миграция: выдать админку пользователю durov (hohol@hsahdshd.rf)
             async with conn.execute(
-                "SELECT 1 FROM applied_migrations WHERE name = ?", ("reset_admins_durov_ilya",)
-            ) as cur:
-                done = await cur.fetchone()
-            if done is None:
-                await conn.execute(
-                    "UPDATE users SET is_admin = 0 WHERE username IS NULL OR username NOT IN ('durov', 'илья_новиков_65vsj')"
-                )
-                await conn.execute(
-                    "UPDATE users SET is_admin = 1 WHERE username IN ('durov', 'илья_новиков_65vsj')"
-                )
-                await conn.execute(
-                    "INSERT INTO applied_migrations (name) VALUES (?)", ("reset_admins_durov_ilya",)
-                )
-                logger.info("Миграция reset_admins_durov_ilya применена: админы только durov, илья_новиков_65vsj")
-
-            # Одноразовая миграция: выдать админку пользователю с логином из ADMIN_USERNAME
-            async with conn.execute(
-                "SELECT 1 FROM applied_migrations WHERE name = ?", ("admin_grant_by_login",)
+                "SELECT 1 FROM applied_migrations WHERE name = ?", ("admin_durov",)
             ) as cur:
                 done_admin = await cur.fetchone()
             if done_admin is None:
-                admin_login = (os.getenv("ADMIN_USERNAME") or os.getenv("ADMIN_LOGIN") or "").strip()
-                if admin_login:
-                    await conn.execute(
-                        "UPDATE users SET is_admin = 1 WHERE username = ?",
-                        (admin_login,)
-                    )
-                    await conn.execute(
-                        "INSERT INTO applied_migrations (name) VALUES (?)", ("admin_grant_by_login",)
-                    )
-                    logger.info("Миграция admin_grant_by_login: is_admin=true для пользователя %s", admin_login)
-            
+                await conn.execute(
+                    "UPDATE users SET is_admin = 1 WHERE username = ? AND email = ?",
+                    ("durov", "hohol@hsahdshd.rf")
+                )
+                await conn.execute(
+                    "INSERT INTO applied_migrations (name) VALUES (?)", ("admin_durov",)
+                )
+                logger.info("Миграция admin_durov: is_admin=true для durov (hohol@hsahdshd.rf)")
             await conn.commit()
     
     logger.info("База данных инициализирована")

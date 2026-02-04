@@ -4,7 +4,7 @@ import NewsFeed from '../components/Feed/NewsFeed';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { mockFriends, mockGroups } from '../mock/mockData';
-import { Users, Calendar, TrendingUp, Music, UserPlus, Users as GroupIcon } from 'lucide-react';
+import { Users, Music, UserPlus, Users as GroupIcon } from 'lucide-react';
 
 const HomePage = () => {
   return (
@@ -34,29 +34,6 @@ const HomePage = () => {
           <Card className="animate-slide-right" style={{ animationDelay: '200ms' }}>
             <CardHeader>
               <CardTitle className="text-lg flex items-center">
-                <TrendingUp className="w-5 h-5 mr-2 text-orange-500" />
-                Популярное
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="text-center py-6">
-              <div className="animate-pulse-gentle">
-                <TrendingUp className="w-10 h-10 text-gray-400 mx-auto mb-3" />
-              </div>
-              <p className="text-sm text-gray-500">Пока нет популярных тем</p>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Main Content - News Feed */}
-        <div className="lg:col-span-2">
-          <NewsFeed />
-        </div>
-
-        {/* Right Sidebar - Empty States */}
-        <div className="lg:col-span-1 space-y-4">
-          <Card className="animate-slide-left">
-            <CardHeader>
-              <CardTitle className="text-lg flex items-center">
                 <GroupIcon className="w-5 h-5 mr-2 text-blue-500" />
                 Мои группы
               </CardTitle>
@@ -71,23 +48,16 @@ const HomePage = () => {
               </Button>
             </CardContent>
           </Card>
+        </div>
 
-          <Card className="animate-slide-left" style={{ animationDelay: '200ms' }}>
-            <CardHeader>
-              <CardTitle className="text-lg flex items-center">
-                <Calendar className="w-5 h-5 mr-2 text-purple-500" />
-                События
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="text-center py-6">
-              <div className="animate-pulse-gentle">
-                <Calendar className="w-10 h-10 text-gray-400 mx-auto mb-3" />
-              </div>
-              <p className="text-sm text-gray-500">Нет предстоящих событий</p>
-            </CardContent>
-          </Card>
+        {/* Main Content - News Feed */}
+        <div className="lg:col-span-2">
+          <NewsFeed />
+        </div>
 
-          <Card className="animate-slide-left" style={{ animationDelay: '400ms' }}>
+        {/* Right Sidebar - Empty States */}
+        <div className="lg:col-span-1 space-y-4">
+          <Card className="animate-slide-left">
             <CardHeader>
               <CardTitle className="text-lg flex items-center">
                 <Music className="w-5 h-5 mr-2 text-green-500" />
