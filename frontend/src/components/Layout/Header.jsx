@@ -61,8 +61,8 @@ const Header = ({ onMenuClick }) => {
   };
 
   return (
-    <header className="bg-card border-b border-border fixed top-0 left-0 lg:left-64 right-0 z-40 h-14 sm:h-16 safe-area-inset-top w-full max-w-[100vw] min-w-0">
-      <div className="flex items-center justify-between h-full gap-2 px-3 sm:px-6 min-w-0 w-full">
+    <header className="bg-card border-b border-border fixed top-0 left-0 right-0 lg:left-64 lg:w-[calc(100vw-16rem)] z-40 h-14 sm:h-16 safe-area-inset-top w-full max-w-[100vw] min-w-0 overflow-visible">
+      <div className="flex flex-nowrap items-center justify-between h-full gap-2 px-3 sm:px-6 min-w-0 w-full overflow-visible">
         {/* Mobile menu button */}
         <Button
           variant="ghost"
@@ -74,8 +74,8 @@ const Header = ({ onMenuClick }) => {
           <Menu className="h-5 w-5" />
         </Button>
 
-        {/* Search Bar */}
-        <div className="flex-1 min-w-0 max-w-lg">
+        {/* Search Bar — на ПК ограничиваем ширину, чтобы справа всегда помещались кнопки */}
+        <div className="flex-1 min-w-0 max-w-lg lg:max-w-md">
           <form onSubmit={handleSearch} className="relative">
             <Search className="absolute left-2 sm:left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4 shrink-0" />
             <Input
@@ -88,8 +88,8 @@ const Header = ({ onMenuClick }) => {
           </form>
         </div>
 
-        {/* Right Side Actions */}
-        <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+        {/* Right Side Actions — уведомления, сообщения, аватар (профиль/настройки/выход) */}
+        <div className="flex flex-nowrap items-center gap-1 sm:gap-2 shrink-0 overflow-visible">
           {/* Create Post - icon only on small */}
           <Button 
             variant="outline" 

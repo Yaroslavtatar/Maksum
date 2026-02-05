@@ -20,6 +20,7 @@ import UserProfile from "./pages/UserProfile";
 import UsersPage from "./pages/UsersPage";
 import MediaPage from "./pages/MediaPage";
 import CryAdminPage from "./pages/CryAdminPage";
+import VerifyEmailPage from "./pages/VerifyEmailPage";
 
 const BACKEND_URL = '';
 const API = BACKEND_URL ? `${BACKEND_URL}/api` : '/api';
@@ -78,6 +79,11 @@ function App() {
           <Route path="/login" element={
             <PublicRoute>
               <LoginPage />
+            </PublicRoute>
+          } />
+          <Route path="/verify-email" element={
+            <PublicRoute>
+              <VerifyEmailPage />
             </PublicRoute>
           } />
 

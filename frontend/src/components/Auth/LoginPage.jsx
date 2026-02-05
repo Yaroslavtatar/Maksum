@@ -107,27 +107,10 @@ const LoginPage = () => {
       });
       
       if (registerResponse.data) {
-        setSuccess('Регистрация успешна! Выполняется вход...');
-        
-        // Автоматический вход после регистрации
-        setTimeout(async () => {
-          try {
-            const loginResponse = await axios.post('/auth/login', {
-              username_or_email: registerData.email,
-              password: registerData.password,
-            });
-            
-            if (loginResponse.data.access_token) {
-              localStorage.setItem('token', loginResponse.data.access_token);
-              // Отправляем событие для обновления данных пользователя
-              window.dispatchEvent(new Event('maksum:token-set'));
-              navigate('/');
-            }
-          } catch (loginErr) {
-            setError('Регистрация успешна, но вход не удался. Попробуйте войти вручную.');
-            setLoading(false);
-          }
-        }, 1000);
+        setSuccess('Регистрация успешна! На вашу почту отправлен код. Введите его на следующей странице.');
+        setTimeout(() => {
+          navigate('/verify-email', { state: { email: registerData.email.trim().toLowerCase() } });
+        }, 1200);
       }
     } catch (err) {
       const detail = err?.response?.data?.detail;

@@ -73,6 +73,10 @@ htmlcov/
 .env
 .env.*
 !.env.example
+mail.env
+backend/mail.env
+!mail.env.example
+!backend/mail.env.example
 
 # ============ Временные и артефакты ============
 *.tmp

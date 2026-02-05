@@ -11,6 +11,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
 import re
+import random
 import uuid
 from datetime import datetime, timedelta
 import json
@@ -22,6 +23,7 @@ from database import get_db, init_db, close_db, get_db_type
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+load_dotenv(ROOT_DIR / 'mail.env')  # SMTP для подтверждения почты
 
 # Create the main app without a prefix
 app = FastAPI()
@@ -35,6 +37,45 @@ JWT_SECRET = os.getenv("JWT_SECRET", "dev_secret_change_me")
 JWT_ALG = "HS256"
 # 30 дней по умолчанию — при перезаходе в браузер пользователь остаётся в аккаунте
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "43200"))
+
+# SMTP для подтверждения почты (mail.env)
+SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "").strip()
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "").strip()
+MAIL_FROM = os.getenv("MAIL_FROM", SMTP_USER or "").strip()
+# Код подтверждения действует 15 минут
+VERIFICATION_CODE_EXPIRE_MINUTES = int(os.getenv("VERIFICATION_CODE_EXPIRE_MINUTES", "15"))
+
+def _generate_verification_code() -> str:
+    """Генерирует 6-значный цифровой код для подтверждения почты."""
+    return "".join(random.choices("0123456789", k=6))
+
+def _send_verification_email(to_email: str, code: str) -> bool:
+    """Отправляет письмо с кодом подтверждения (не ссылкой). Возвращает True при успехе."""
+    if not SMTP_HOST or not to_email or not code:
+        return False
+    try:
+        import smtplib
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
+        subject = "Код подтверждения — VK SOSA"
+        body = f"Ваш код подтверждения: {code}\n\nВведите его на странице входа. Код действителен {VERIFICATION_CODE_EXPIRE_MINUTES} мин."
+        msg = MIMEMultipart()
+        msg["Subject"] = subject
+        msg["From"] = MAIL_FROM or SMTP_USER
+        msg["To"] = to_email
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as s:
+            if SMTP_PORT in (465, 587):
+                s.starttls()
+            if SMTP_USER and SMTP_PASSWORD:
+                s.login(SMTP_USER, SMTP_PASSWORD)
+            s.sendmail(msg["From"], to_email, msg.as_string())
+        return True
+    except Exception as e:
+        logging.warning("Send verification email failed: %s", e)
+        return False
 
 # Define Models
 class StatusCheck(BaseModel):
@@ -59,10 +100,40 @@ class UserPublic(BaseModel):
     email: str
     avatar_url: Optional[str] = None
 
-# Валидация: username только латиница, цифры, подчёркивание; 3–30 символов
+# Валидация: username только латиница, цифры, подчёркивание; 3–30 символов (защита от XSS и обхода)
 USERNAME_PATTERN = re.compile(r"^[a-zA-Z0-9_]{3,30}$")
 # Упрощённая проверка легитимности почты (формат)
 EMAIL_PATTERN = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
+# Запрещённые символы в любом пользовательском вводе (XSS)
+DANGEROUS_PATTERN = re.compile(r"<|>|[\"']|&(?!#?\w+;)|script\s*:|javascript\s*:", re.I)
+
+
+def _validate_username_safe(value: str) -> str:
+    """Проверка логина: только безопасные символы, без XSS."""
+    if not value or not isinstance(value, str):
+        raise ValueError("Username обязателен")
+    v = value.strip()
+    if len(v) < 3 or len(v) > 30:
+        raise ValueError("Username должен быть от 3 до 30 символов")
+    if DANGEROUS_PATTERN.search(v):
+        raise ValueError("Username содержит недопустимые символы")
+    if not USERNAME_PATTERN.match(v):
+        raise ValueError("Username: только латинские буквы, цифры и подчёркивание")
+    return v
+
+
+def _validate_email_safe(value: str) -> str:
+    """Проверка email: формат и без опасных символов."""
+    if not value or not isinstance(value, str):
+        raise ValueError("Email обязателен")
+    v = value.strip().lower()
+    if len(v) > 255:
+        raise ValueError("Email слишком длинный")
+    if DANGEROUS_PATTERN.search(v):
+        raise ValueError("Email содержит недопустимые символы")
+    if not EMAIL_PATTERN.match(v):
+        raise ValueError("Некорректный формат email")
+    return v
 
 class RegisterInput(BaseModel):
     username: str
@@ -129,6 +200,20 @@ class UserUpdate(BaseModel):
     hide_email: Optional[bool] = None
     chat_welcome_text: Optional[str] = None
     chat_welcome_media_url: Optional[str] = None
+
+    @field_validator("username")
+    @classmethod
+    def username_safe(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        return _validate_username_safe(v)
+
+    @field_validator("email")
+    @classmethod
+    def email_safe(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        return _validate_email_safe(v)
 
 class UserSearchResponse(BaseModel):
     id: int
@@ -389,12 +474,8 @@ async def root():
 # ===================== Auth API =====================
 @api_router.post("/auth/register", response_model=UserPublic)
 async def register_user(data: RegisterInput):
-    # TODO: подтверждение почты — после вставки пользователя:
-    # 1) сгенерировать email_verification_token (uuid/random), записать в users + email_verification_sent_at
-    # 2) отправить письмо с ссылкой вида /verify-email?token=... (через SMTP/сервис)
-    # 3) endpoint GET /auth/verify-email?token=... — найти user по token, выставить email_verified_at=NOW(), очистить token
-    # 4) при смене пароля/чувствительных действиях опционально проверять email_verified_at IS NOT NULL
     db_type = get_db_type()
+    verification_code = _generate_verification_code()
     async with get_db() as conn:
         if db_type == 'postgresql':
             exists = await conn.fetchrow(
@@ -415,18 +496,18 @@ async def register_user(data: RegisterInput):
             pw_hash = hash_password(data.password)
         if db_type == 'postgresql':
             user_id = await conn.fetchval(
-                "INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id",
-                data.username, data.email, pw_hash
+                "INSERT INTO users (username, email, password_hash, email_verification_token, email_verification_sent_at) VALUES ($1, $2, $3, $4, NOW()) RETURNING id",
+                data.username, data.email, pw_hash, verification_code
             )
-            return UserPublic(id=user_id, username=data.username, email=data.email, avatar_url=None)
         else:
             cursor = await conn.execute(
-                "INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)",
-                (data.username, data.email, pw_hash)
+                "INSERT INTO users (username, email, password_hash, email_verification_token, email_verification_sent_at) VALUES (?, ?, ?, ?, datetime('now'))",
+                (data.username, data.email, pw_hash, verification_code)
             )
             await conn.commit()
             user_id = cursor.lastrowid
-            return UserPublic(id=user_id, username=data.username, email=data.email, avatar_url=None)
+    _send_verification_email(data.email, verification_code)
+    return UserPublic(id=user_id, username=data.username, email=data.email, avatar_url=None)
 
 def _client_ip(request: Request) -> str:
     xff = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For") or ""
@@ -510,25 +591,171 @@ async def login_user(request: Request, data: LoginInput):
         return TokenResponse(access_token=token, device_id=device_id)
 
 
-# ---------- Основа для подтверждения почты (реализация по желанию) ----------
-# Эндпоинты-заглушки: раскомментировать и дописать логику (SMTP, шаблон письма, ссылка на фронт).
-#
-# @api_router.get("/auth/verify-email")
-# async def verify_email(token: str = Query(...)):
-#     """Переход по ссылке из письма: найти user по email_verification_token=token,
-#        выставить email_verified_at=NOW(), очистить email_verification_token и _sent_at.
-#        Вернуть редирект на фронт /login?verified=1 или JSON { "verified": true }."""
-#     # async with get_db() as conn:
-#     #     row = await conn.fetchrow("SELECT id FROM users WHERE email_verification_token = $1", token)
-#     #     if not row: raise HTTPException(404, "Invalid or expired link")
-#     #     await conn.execute("UPDATE users SET email_verified_at = NOW(), email_verification_token = NULL, email_verification_sent_at = NULL WHERE id = $1", row["id"])
-#     raise HTTPException(status_code=501, detail="Email verification not implemented yet")
-#
-# @api_router.post("/auth/send-verification-email")
-# async def send_verification_email(user_id: int = Depends(get_current_user_id)):
-#     """Выслать повторно письмо с ссылкой подтверждения. Ограничить частоту по email_verification_sent_at (например раз в 5 мин)."""
-#     # Получить email пользователя, сгенерировать новый token, записать в users, отправить письмо (SMTP/SendGrid и т.д.)
-#     raise HTTPException(status_code=501, detail="Email verification not implemented yet")
+# ---------- Подтверждение почты (код из письма) ----------
+class VerifyEmailInput(BaseModel):
+    email: str
+    code: str
+
+class VerifyEmailResponse(BaseModel):
+    verified: bool = True
+    access_token: str
+    token_type: str = "bearer"
+    device_id: Optional[int] = None
+
+@api_router.post("/auth/verify-email", response_model=VerifyEmailResponse)
+async def verify_email(data: VerifyEmailInput):
+    """Пользователь вводит почту и код из письма — при совпадении почта подтверждается и возвращается токен (успешный вход)."""
+    email = (data.email or "").strip().lower()
+    code = (data.code or "").strip()
+    if not email or not code:
+        raise HTTPException(status_code=400, detail="Укажите почту и код")
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            row = await conn.fetchrow(
+                "SELECT id, email_verification_token, email_verification_sent_at FROM users WHERE email = $1",
+                email
+            )
+        else:
+            async with conn.execute(
+                "SELECT id, email_verification_token, email_verification_sent_at FROM users WHERE LOWER(email) = ?",
+                (email,)
+            ) as cur:
+                r = await cur.fetchone()
+                row = dict(id=r[0], email_verification_token=r[1], email_verification_sent_at=r[2]) if r else None
+        if not row or row.get("email_verification_token") != code:
+            raise HTTPException(status_code=400, detail="Неверный код или почта")
+        sent_at = row.get("email_verification_sent_at")
+        if sent_at:
+            try:
+                from datetime import timezone
+                if isinstance(sent_at, str):
+                    sent_at = datetime.fromisoformat(sent_at.replace("Z", "+00:00"))
+                now = datetime.now(timezone.utc)
+                st = sent_at if sent_at.tzinfo else sent_at.replace(tzinfo=timezone.utc)
+                if (now - st) > timedelta(minutes=VERIFICATION_CODE_EXPIRE_MINUTES):
+                    raise HTTPException(status_code=400, detail="Код истёк. Запросите новый.")
+            except HTTPException:
+                raise
+            except Exception:
+                pass
+        user_id = row["id"] if isinstance(row, dict) else row[0]
+        if db_type == 'postgresql':
+            await conn.execute(
+                "UPDATE users SET email_verified_at = NOW(), email_verification_token = NULL, email_verification_sent_at = NULL WHERE id = $1",
+                user_id
+            )
+        else:
+            await conn.execute(
+                "UPDATE users SET email_verified_at = datetime('now'), email_verification_token = NULL, email_verification_sent_at = NULL WHERE id = ?",
+                (user_id,)
+            )
+            await conn.commit()
+    access_token = create_access_token({"sub": str(user_id)})
+    return VerifyEmailResponse(verified=True, access_token=access_token, token_type="bearer", device_id=None)
+
+@api_router.post("/auth/send-verification-email")
+async def resend_verification_email(user_id: int = Depends(get_current_user_id)):
+    """Повторно отправить код на почту текущего пользователя. Не чаще раза в 5 минут."""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            row = await conn.fetchrow(
+                "SELECT email, email_verification_sent_at FROM users WHERE id = $1",
+                user_id
+            )
+        else:
+            async with conn.execute(
+                "SELECT email, email_verification_sent_at FROM users WHERE id = ?",
+                (user_id,)
+            ) as cur:
+                r = await cur.fetchone()
+                row = dict(email=r[0], email_verification_sent_at=r[1]) if r else None
+        if not row or not row.get("email"):
+            raise HTTPException(status_code=400, detail="User or email not found")
+        sent_at = row.get("email_verification_sent_at")
+        if sent_at:
+            try:
+                from datetime import timezone
+                if isinstance(sent_at, str):
+                    sent_at = datetime.fromisoformat(sent_at.replace("Z", "+00:00"))
+                now = datetime.now(timezone.utc)
+                st = sent_at if sent_at.tzinfo else sent_at.replace(tzinfo=timezone.utc)
+                if (now - st) < timedelta(minutes=5):
+                    raise HTTPException(status_code=429, detail="Код уже отправлялся. Подождите 5 минут.")
+            except HTTPException:
+                raise
+            except Exception:
+                pass
+        new_code = _generate_verification_code()
+        if db_type == 'postgresql':
+            await conn.execute(
+                "UPDATE users SET email_verification_token = $1, email_verification_sent_at = NOW() WHERE id = $2",
+                new_code, user_id
+            )
+        else:
+            await conn.execute(
+                "UPDATE users SET email_verification_token = ?, email_verification_sent_at = datetime('now') WHERE id = ?",
+                (new_code, user_id)
+            )
+            await conn.commit()
+    ok = _send_verification_email(row["email"], new_code)
+    return {"sent": ok}
+
+class SendVerificationCodeInput(BaseModel):
+    email: str
+
+@api_router.post("/auth/send-verification-code")
+async def send_verification_code(data: SendVerificationCodeInput):
+    """Отправить код на указанную почту (без входа). Для повторной отправки после регистрации. Не чаще раза в 5 минут."""
+    email = (data.email or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="Укажите почту")
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            row = await conn.fetchrow(
+                "SELECT id, email_verification_sent_at FROM users WHERE email = $1",
+                email
+            )
+        else:
+            async with conn.execute(
+                "SELECT id, email_verification_sent_at FROM users WHERE LOWER(email) = ?",
+                (email,)
+            ) as cur:
+                r = await cur.fetchone()
+                row = dict(id=r[0], email_verification_sent_at=r[1]) if r else None
+        if not row:
+            raise HTTPException(status_code=404, detail="Пользователь с такой почтой не найден")
+        sent_at = row.get("email_verification_sent_at")
+        if sent_at:
+            try:
+                from datetime import timezone
+                if isinstance(sent_at, str):
+                    sent_at = datetime.fromisoformat(sent_at.replace("Z", "+00:00"))
+                now = datetime.now(timezone.utc)
+                st = sent_at if sent_at.tzinfo else sent_at.replace(tzinfo=timezone.utc)
+                if (now - st) < timedelta(minutes=5):
+                    raise HTTPException(status_code=429, detail="Код уже отправлялся. Подождите 5 минут.")
+            except HTTPException:
+                raise
+            except Exception:
+                pass
+        user_id = row["id"]
+        new_code = _generate_verification_code()
+        if db_type == 'postgresql':
+            await conn.execute(
+                "UPDATE users SET email_verification_token = $1, email_verification_sent_at = NOW() WHERE id = $2",
+                new_code, user_id
+            )
+        else:
+            await conn.execute(
+                "UPDATE users SET email_verification_token = ?, email_verification_sent_at = datetime('now') WHERE id = ?",
+                (new_code, user_id)
+            )
+            await conn.commit()
+    ok = _send_verification_email(email, new_code)
+    return {"sent": ok}
 
 
 # ===================== Users API =====================
@@ -892,6 +1119,9 @@ async def update_me(data: UserUpdate, user_id: int = Depends(get_current_user_id
     updates = []
     values = []
     param_num = 1
+    email_change_code = None  # при смене email — код для письма
+    if data.email is not None:
+        email_change_code = _generate_verification_code()
     
     if data.username is not None:
         if db_type == 'postgresql':
@@ -907,6 +1137,18 @@ async def update_me(data: UserUpdate, user_id: int = Depends(get_current_user_id
         else:
             updates.append("email = ?")
         values.append(data.email)
+        # при смене почты сбрасываем верификацию и ставим новый токен для письма
+        if db_type == 'postgresql':
+            updates.append("email_verified_at = NULL")
+            updates.append(f"email_verification_token = ${param_num}")
+            param_num += 1
+            values.append(email_change_code)
+            updates.append("email_verification_sent_at = NOW()")
+        else:
+            updates.append("email_verified_at = NULL")
+            updates.append("email_verification_token = ?")
+            values.append(email_change_code)
+            updates.append("email_verification_sent_at = datetime('now')")
     if data.avatar_url is not None:
         if db_type == 'postgresql':
             updates.append(f"avatar_url = ${param_num}")
@@ -1052,6 +1294,8 @@ async def update_me(data: UserUpdate, user_id: int = Depends(get_current_user_id
         
         if not row:
             raise HTTPException(status_code=404, detail="User not found")
+        if email_change_code and data.email:
+            _send_verification_email(data.email, email_change_code)
         return row
 
 @api_router.post("/status", response_model=StatusCheck)
