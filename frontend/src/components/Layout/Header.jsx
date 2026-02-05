@@ -61,8 +61,8 @@ const Header = ({ onMenuClick }) => {
   };
 
   return (
-    <header className="bg-card border-b border-border fixed top-0 left-0 lg:left-64 right-0 z-40 h-14 sm:h-16 safe-area-inset-top">
-      <div className="flex items-center justify-between h-full gap-2 px-3 sm:px-6">
+    <header className="bg-card border-b border-border fixed top-0 left-0 lg:left-64 right-0 z-40 h-14 sm:h-16 safe-area-inset-top w-full max-w-[100vw] min-w-0">
+      <div className="flex items-center justify-between h-full gap-2 px-3 sm:px-6 min-w-0 w-full">
         {/* Mobile menu button */}
         <Button
           variant="ghost"

@@ -116,7 +116,7 @@ const FriendsPage = () => {
 
   return (
     <MainLayout>
-      <div className="max-w-6xl mx-auto">
+      <div className="w-full min-w-0 max-w-6xl mx-auto">
         <div className="mb-6 animate-slide-down">
           <h1 className="text-2xl font-bold mb-4">Друзья</h1>
           
@@ -139,7 +139,7 @@ const FriendsPage = () => {
 
           {/* Tabs */}
           <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="grid w-full grid-cols-4 max-w-md">
+            <TabsList className="flex w-full overflow-x-auto flex-nowrap gap-1 p-1 min-h-[44px] sm:grid sm:grid-cols-4 sm:max-w-md [&>button]:shrink-0">
               <TabsTrigger value="all">
                 Все друзья {friends.length > 0 && `(${friends.length})`}
               </TabsTrigger>

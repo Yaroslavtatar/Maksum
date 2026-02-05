@@ -69,9 +69,9 @@ const MediaPage = () => {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="w-full min-w-0 space-y-6">
       <div>
-        <h1 className="text-2xl font-bold">Медиа</h1>
+        <h1 className="text-xl sm:text-2xl font-bold">Медиа</h1>
         <p className="text-muted-foreground mt-1">
           Фото из ваших записей и из ленты друзей
         </p>

@@ -85,7 +85,7 @@ const UsersPage = () => {
 
   return (
     <MainLayout>
-      <div className="max-w-4xl mx-auto">
+      <div className="w-full min-w-0 max-w-4xl mx-auto">
         <form onSubmit={onSearch} className="flex gap-3 mb-6">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground w-4 h-4" />

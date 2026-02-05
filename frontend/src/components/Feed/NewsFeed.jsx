@@ -83,7 +83,7 @@ const NewsFeed = () => {
 
   if (isLoading) {
     return (
-      <div className="max-w-2xl mx-auto">
+      <div className="w-full min-w-0 max-w-2xl mx-auto">
         <Card className="animate-pulse">
           <CardContent className="py-12 text-center">
             <Loader2 className="w-8 h-8 animate-spin mx-auto text-blue-500" />
@@ -95,7 +95,7 @@ const NewsFeed = () => {
   }
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
+    <div className="w-full min-w-0 max-w-2xl mx-auto space-y-4 sm:space-y-6">
       {/* Create Post */}
       <Card className="overflow-hidden border-border bg-card">
         <form onSubmit={handleCreatePost}>

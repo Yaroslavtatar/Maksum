@@ -60,7 +60,7 @@ const ProfilePage = () => {
   if (loading) {
     return (
       <MainLayout>
-        <div className="max-w-4xl mx-auto">
+        <div className="w-full min-w-0 max-w-4xl mx-auto">
           <Card>
             <CardContent className="text-center py-12">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto"></div>
@@ -78,7 +78,7 @@ const ProfilePage = () => {
 
   return (
     <MainLayout>
-      <div className="max-w-4xl mx-auto">
+      <div className="w-full min-w-0 max-w-4xl mx-auto">
         {/* Cover Photo & Profile Info — баннер кастомный от пользователя, цветовая гамма профиля */}
         <Card className={`mb-6 border-l-4 ${accentBorderClass}`}>
           <div className="relative">

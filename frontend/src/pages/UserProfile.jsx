@@ -101,7 +101,7 @@ const UserProfile = ({ username: usernameProp }) => {
   if (loading) {
     return (
       <MainLayout>
-        <div className="max-w-4xl mx-auto">
+        <div className="w-full min-w-0 max-w-4xl mx-auto">
           <Card>
             <CardContent className="text-center py-12">
               <Loader2 className="w-8 h-8 animate-spin mx-auto text-primary mb-4" />
@@ -116,7 +116,7 @@ const UserProfile = ({ username: usernameProp }) => {
   if (!user) {
     return (
       <MainLayout>
-        <div className="max-w-4xl mx-auto">
+        <div className="w-full min-w-0 max-w-4xl mx-auto">
           <Card>
             <CardContent className="text-center py-12">
               <p className="text-muted-foreground">Пользователь не найден</p>
@@ -139,7 +139,7 @@ const UserProfile = ({ username: usernameProp }) => {
 
   return (
     <MainLayout>
-      <div className="max-w-4xl mx-auto">
+      <div className="w-full min-w-0 max-w-4xl mx-auto">
         <Card className={`mb-6 border-l-4 ${accentBorderClass}`}>
           <div className="relative">
             {/* Баннер профиля (кастомное изображение пользователя) */}

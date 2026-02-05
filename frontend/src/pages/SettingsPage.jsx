@@ -141,7 +141,7 @@ const SettingsPage = () => {
 
   return (
     <MainLayout>
-      <div className="max-w-6xl mx-auto">
+      <div className="w-full min-w-0 max-w-6xl mx-auto">
         <div className="mb-4 sm:mb-6 animate-slide-down">
           <h1 className="text-2xl sm:text-3xl font-bold mb-2">Настройки</h1>
           <p className="text-muted-foreground text-sm sm:text-base">Управляйте своими настройками и предпочтениями</p>

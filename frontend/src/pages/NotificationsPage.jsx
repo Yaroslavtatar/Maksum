@@ -136,42 +136,43 @@ const NotificationsPage = () => {
 
   return (
     <MainLayout>
-      <div className="max-w-4xl mx-auto">
-        <div className="flex justify-between items-center mb-6 animate-slide-down">
-          <div className="flex items-center space-x-3">
-            <h1 className="text-2xl font-bold">Уведомления</h1>
+      <div className="w-full min-w-0">
+        <div className="flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center mb-4 sm:mb-6 animate-slide-down">
+          <div className="flex items-center gap-2 min-w-0">
+            <h1 className="text-xl sm:text-2xl font-bold truncate">Уведомления</h1>
             {unreadCount > 0 && (
-              <span className="bg-primary text-primary-foreground text-xs rounded-full px-2 py-1">
+              <span className="bg-primary text-primary-foreground text-xs rounded-full px-2 py-0.5 shrink-0">
                 {unreadCount}
               </span>
             )}
           </div>
-          
-          <div className="flex space-x-2">
+          <div className="flex flex-wrap gap-2 shrink-0">
             {unreadCount > 0 && (
-              <Button variant="outline" size="sm" onClick={markAllAsRead}>
-                Отметить все как прочитанные
+              <Button variant="outline" size="sm" onClick={markAllAsRead} className="text-xs sm:text-sm">
+                <CheckCircle className="w-4 h-4 mr-1.5" />
+                <span className="hidden sm:inline">Отметить все как прочитанные</span>
+                <span className="sm:hidden">Прочитано</span>
               </Button>
             )}
-            <Button variant="outline" size="sm" className="animate-scale-hover">
-              <Settings className="w-4 h-4 mr-2" />
-              Настройки
+            <Button variant="outline" size="sm" className="animate-scale-hover" onClick={() => navigate('/settings')}>
+              <Settings className="w-4 h-4 sm:mr-2" />
+              <span className="hidden sm:inline">Настройки</span>
             </Button>
           </div>
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-4 max-w-md mb-6">
-            <TabsTrigger value="all">
+          <TabsList className="flex w-full overflow-x-auto flex-nowrap gap-1 p-1 mb-4 sm:mb-6 min-h-[44px] sm:grid sm:grid-cols-4 sm:max-w-md">
+            <TabsTrigger value="all" className="shrink-0 text-xs sm:text-sm">
               Все {unreadCount > 0 && `(${unreadCount})`}
             </TabsTrigger>
-            <TabsTrigger value="friends">
+            <TabsTrigger value="friends" className="shrink-0 text-xs sm:text-sm">
               Друзья {friendRequests.length > 0 && `(${friendRequests.length})`}
             </TabsTrigger>
-            <TabsTrigger value="likes">
+            <TabsTrigger value="likes" className="shrink-0 text-xs sm:text-sm">
               Активность {likes.length > 0 && `(${likes.length})`}
             </TabsTrigger>
-            <TabsTrigger value="other">Другое</TabsTrigger>
+            <TabsTrigger value="other" className="shrink-0 text-xs sm:text-sm">Другое</TabsTrigger>
           </TabsList>
 
           {/* All Notifications */}
@@ -205,18 +206,18 @@ const NotificationsPage = () => {
                     }`}
                     onClick={() => handleNotificationClick(notif)}
                   >
-                    <CardContent className="p-4">
-                      <div className="flex items-start space-x-3">
-                        <Avatar className="w-10 h-10">
+                    <CardContent className="p-3 sm:p-4">
+                      <div className="flex items-start gap-2 sm:gap-3 min-w-0">
+                        <Avatar className="w-9 h-9 sm:w-10 sm:h-10 shrink-0">
                           <AvatarImage src={notif.actor_avatar} alt={notif.actor_username} />
                           <AvatarFallback>{getNotificationIcon(notif.type)}</AvatarFallback>
                         </Avatar>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center space-x-2">
-                            <p className="font-medium text-sm">
+                        <div className="flex-1 min-w-0 overflow-hidden">
+                          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                            <p className="font-medium text-sm truncate">
                               {notif.actor_username || 'Пользователь'}
                             </p>
-                            <span className="text-sm text-muted-foreground">
+                            <span className="text-xs sm:text-sm text-muted-foreground break-words">
                               {notif.content || 'выполнил(а) действие'}
                             </span>
                           </div>

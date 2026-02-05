@@ -5,7 +5,7 @@ import MusicPlayer from '../components/Music/MusicPlayer';
 const MusicPage = () => {
   return (
     <MainLayout>
-      <div className="max-w-6xl mx-auto">
+      <div className="w-full min-w-0 max-w-6xl mx-auto">
         <div className="mb-6 animate-slide-down">
           <h1 className="text-2xl font-bold mb-2">Музыка</h1>
           <p className="text-gray-600">Открой для себя новую музыку и создавай плейлисты</p>
