@@ -9,9 +9,9 @@ import { Users, Music, UserPlus, Users as GroupIcon } from 'lucide-react';
 const HomePage = () => {
   return (
     <MainLayout>
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        {/* Left Sidebar - Empty States */}
-        <div className="lg:col-span-1 space-y-4">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 sm:gap-6">
+        {/* Left Sidebar - Empty States (только на десктопе) */}
+        <div className="hidden lg:block lg:col-span-1 space-y-4">
           <Card className="animate-slide-right">
             <CardHeader>
               <CardTitle className="text-lg flex items-center">
@@ -50,13 +50,13 @@ const HomePage = () => {
           </Card>
         </div>
 
-        {/* Main Content - News Feed */}
+        {/* Main Content - News Feed (на мобильных занимает всю ширину) */}
         <div className="lg:col-span-2">
           <NewsFeed />
         </div>
 
-        {/* Right Sidebar - Empty States */}
-        <div className="lg:col-span-1 space-y-4">
+        {/* Right Sidebar - Empty States (только на десктопе) */}
+        <div className="hidden lg:block lg:col-span-1 space-y-4">
           <Card className="animate-slide-left">
             <CardHeader>
               <CardTitle className="text-lg flex items-center">

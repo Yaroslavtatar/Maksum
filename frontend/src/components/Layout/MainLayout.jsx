@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import Sidebar from './Sidebar';
 import Header from './Header';
+import MobileNavBar from './MobileNavBar';
 import { Sheet, SheetContent } from '../ui/sheet';
 
 const MainLayout = ({ children }) => {
@@ -26,11 +27,14 @@ const MainLayout = ({ children }) => {
       <Header onMenuClick={() => setSidebarOpen(true)} />
 
       {/* Main Content */}
-      <main className="lg:ml-64 pt-14 sm:pt-16 min-h-screen min-w-0">
+      <main className="lg:ml-64 pt-14 sm:pt-16 pb-16 sm:pb-0 min-h-screen min-w-0">
         <div className="container mx-auto px-3 sm:px-6 py-4 sm:py-6 max-w-full">
           {children}
         </div>
       </main>
+
+      {/* Bottom navigation for mobile */}
+      <MobileNavBar />
     </div>
   );
 };
