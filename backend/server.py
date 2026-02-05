@@ -2364,10 +2364,23 @@ async def get_messages(conversation_id: int, user_id: int = Depends(get_current_
         
         if not member:
                 raise HTTPException(status_code=403, detail="Not a participant")
+
+        # Когда получатель открывает чат — помечаем сообщения от собеседника как «доставлено»
+        if db_type == 'postgresql':
+            await conn.execute(
+                """UPDATE messages SET delivered_at = NOW() WHERE conversation_id = $1 AND sender_id != $2 AND delivered_at IS NULL""",
+                conversation_id, user_id
+            )
+        else:
+            await conn.execute(
+                """UPDATE messages SET delivered_at = datetime('now') WHERE conversation_id = ? AND sender_id != ? AND delivered_at IS NULL""",
+                (conversation_id, user_id)
+            )
+            await conn.commit()
         
         if db_type == 'postgresql':
             rows = await conn.fetch(
-                """SELECT id, sender_id, content, created_at, voice_url, voice_duration_seconds, voice_transcription
+                """SELECT id, sender_id, content, created_at, voice_url, voice_duration_seconds, voice_transcription, delivered_at, read_at
                    FROM messages WHERE conversation_id=$1 ORDER BY created_at ASC LIMIT 500""",
                 conversation_id
             )
@@ -2375,7 +2388,7 @@ async def get_messages(conversation_id: int, user_id: int = Depends(get_current_
         else:  # sqlite
             try:
                 async with conn.execute(
-                    """SELECT id, sender_id, content, created_at, voice_url, voice_duration_seconds, voice_transcription
+                    """SELECT id, sender_id, content, created_at, voice_url, voice_duration_seconds, voice_transcription, delivered_at, read_at
                        FROM messages WHERE conversation_id=? ORDER BY created_at ASC LIMIT 500""",
                     (conversation_id,)
                 ) as cursor:
@@ -2389,24 +2402,61 @@ async def get_messages(conversation_id: int, user_id: int = Depends(get_current_
                             "voice_url": r[4] if len(r) > 4 else None,
                             "voice_duration_seconds": r[5] if len(r) > 5 else None,
                             "voice_transcription": r[6] if len(r) > 6 else None,
+                            "delivered_at": r[7] if len(r) > 7 else None,
+                            "read_at": r[8] if len(r) > 8 else None,
                         }
                         for r in rows_data
                     ]
             except Exception:
                 async with conn.execute(
-                    "SELECT id, sender_id, content, created_at, voice_url FROM messages WHERE conversation_id=? ORDER BY created_at ASC LIMIT 500",
+                    "SELECT id, sender_id, content, created_at, voice_url, voice_duration_seconds, voice_transcription FROM messages WHERE conversation_id=? ORDER BY created_at ASC LIMIT 500",
                     (conversation_id,)
                 ) as cursor:
                     rows_data = await cursor.fetchall()
                     rows = [
                         {"id": r[0], "sender_id": r[1], "content": r[2], "created_at": r[3], "voice_url": r[4] if len(r) > 4 else None,
-                         "voice_duration_seconds": None, "voice_transcription": None}
+                         "voice_duration_seconds": r[5] if len(r) > 5 else None, "voice_transcription": r[6] if len(r) > 6 else None,
+                         "delivered_at": None, "read_at": None}
                         for r in rows_data
                     ]
         for r in rows:
-            if r.get("created_at") is not None and hasattr(r["created_at"], "isoformat"):
-                r["created_at"] = _datetime_to_iso_utc(r["created_at"])
+            for key in ("created_at", "delivered_at", "read_at"):
+                if r.get(key) is not None and hasattr(r[key], "isoformat"):
+                    r[key] = _datetime_to_iso_utc(r[key])
         return rows
+
+
+@api_router.post("/conversations/{conversation_id}/read")
+async def mark_conversation_read(conversation_id: int, user_id: int = Depends(get_current_user_id)):
+    """Пометить все сообщения в диалоге как прочитанные (открыл чат — как в Telegram)."""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            member = await conn.fetchval(
+                "SELECT 1 FROM conversation_participants WHERE conversation_id=$1 AND user_id=$2",
+                conversation_id, user_id
+            )
+        else:
+            async with conn.execute(
+                "SELECT 1 FROM conversation_participants WHERE conversation_id=? AND user_id=?",
+                (conversation_id, user_id)
+            ) as cur:
+                member = await cur.fetchone()
+        if not member:
+            raise HTTPException(status_code=403, detail="Not a participant")
+        if db_type == 'postgresql':
+            await conn.execute(
+                """UPDATE messages SET read_at = NOW() WHERE conversation_id = $1 AND sender_id != $2 AND read_at IS NULL""",
+                conversation_id, user_id
+            )
+        else:
+            await conn.execute(
+                """UPDATE messages SET read_at = datetime('now') WHERE conversation_id = ? AND sender_id != ? AND read_at IS NULL""",
+                (conversation_id, user_id)
+            )
+            await conn.commit()
+    return {"status": "ok"}
+
 
 @api_router.post("/messages/send")
 async def send_message(data: MessageSend, user_id: int = Depends(get_current_user_id)):

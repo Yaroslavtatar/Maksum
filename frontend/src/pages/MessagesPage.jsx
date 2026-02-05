@@ -18,7 +18,9 @@ import {
   Square,
   Play,
   Pause,
-  ArrowLeft
+  ArrowLeft,
+  Check,
+  CheckCheck
 } from 'lucide-react';
 
 // Формат длительности в минутах:секундах
@@ -30,7 +32,7 @@ const formatDuration = (seconds) => {
 };
 
 // Голосовое сообщение как в Telegram: play, длительность, прогресс, транскрипция
-const VoiceBubble = ({ src, isOwn, time, durationSeconds: propDuration, transcription }) => {
+const VoiceBubble = ({ src, isOwn, time, durationSeconds: propDuration, transcription, readAt, deliveredAt }) => {
   const audioRef = useRef(null);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -90,8 +92,9 @@ const VoiceBubble = ({ src, isOwn, time, durationSeconds: propDuration, transcri
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between gap-2">
           <span className="text-sm font-medium">Голосовое</span>
-          <span className={`text-[11px] shrink-0 ${isOwn ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
+          <span className={`text-[11px] shrink-0 flex items-center gap-1 ${isOwn ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
             {formatDuration(currentTime)} / {durStr} · {time}
+            {isOwn && (readAt ? <CheckCheck className="w-3.5 h-3.5 text-primary-foreground" /> : deliveredAt ? <CheckCheck className="w-3.5 h-3.5 opacity-80" /> : <Check className="w-3.5 h-3.5 opacity-80" />)}
           </span>
         </div>
         <div className="h-1 rounded-full bg-black/10 mt-1.5 overflow-hidden">
@@ -180,6 +183,11 @@ const MessagesPage = () => {
     try {
       const res = await api.get(`/conversations/${conversationId}/messages`);
       setMessages(res.data || []);
+      // Открыл чат — помечаем сообщения собеседника как прочитанные (как в Telegram)
+      await api.post(`/conversations/${conversationId}/read`).catch(() => {});
+      // Подтягиваем сообщения снова, чтобы увидеть актуальные «прочитано» по нашим
+      const res2 = await api.get(`/conversations/${conversationId}/messages`);
+      setMessages(res2.data || []);
     } catch (e) {
       console.error('Error fetching messages:', e);
       setMessages([]);
@@ -479,14 +487,23 @@ const MessagesPage = () => {
                             time={formatMessageTime(msg.created_at)}
                             durationSeconds={msg.voice_duration_seconds}
                             transcription={msg.voice_transcription}
+                            readAt={msg.read_at}
+                            deliveredAt={msg.delivered_at}
                           />
                         ) : (
                           <>
                             <p className="text-sm break-words whitespace-pre-wrap">{msg.content}</p>
-                            <p className={`text-[11px] mt-1 text-right ${
+                            <p className={`text-[11px] mt-1 flex items-center justify-end gap-1 ${
                               msg.sender_id === user?.id ? 'text-primary-foreground/70' : 'text-muted-foreground'
                             }`}>
-                              {formatMessageTime(msg.created_at)}
+                              <span>{formatMessageTime(msg.created_at)}</span>
+                              {msg.sender_id === user?.id && (
+                                msg.read_at
+                                  ? <CheckCheck className="w-3.5 h-3.5 text-primary-foreground shrink-0" />
+                                  : msg.delivered_at
+                                    ? <CheckCheck className="w-3.5 h-3.5 shrink-0 opacity-80" />
+                                    : <Check className="w-3.5 h-3.5 shrink-0 opacity-80" />
+                              )}
                             </p>
                           </>
                         )}

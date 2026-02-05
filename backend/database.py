@@ -485,6 +485,14 @@ async def init_db():
                 await conn.execute("INSERT INTO applied_migrations (name) VALUES ($1)", "user_devices_last_ip")
                 logger.info("Миграция user_devices_last_ip применена")
 
+            # Доставлено / прочитано в ЛС (как в Telegram)
+            done8 = await conn.fetchval("SELECT 1 FROM applied_migrations WHERE name = $1", "messages_delivered_read")
+            if done8 is None:
+                await conn.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMP")
+                await conn.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS read_at TIMESTAMP")
+                await conn.execute("INSERT INTO applied_migrations (name) VALUES ($1)", "messages_delivered_read")
+                logger.info("Миграция messages_delivered_read применена")
+
         else:  # SQLite
             # SQLite таблицы
             await conn.execute("""
@@ -686,6 +694,12 @@ async def init_db():
                     await conn.commit()
                 if 'voice_transcription' not in msg_cols:
                     await conn.execute("ALTER TABLE messages ADD COLUMN voice_transcription TEXT NULL")
+                    await conn.commit()
+                if 'delivered_at' not in msg_cols:
+                    await conn.execute("ALTER TABLE messages ADD COLUMN delivered_at DATETIME NULL")
+                    await conn.commit()
+                if 'read_at' not in msg_cols:
+                    await conn.execute("ALTER TABLE messages ADD COLUMN read_at DATETIME NULL")
                     await conn.commit()
             except Exception as e:
                 logger.warning(f"Миграция messages (SQLite): {e}")

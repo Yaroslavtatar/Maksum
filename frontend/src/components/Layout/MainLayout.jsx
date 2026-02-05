@@ -26,9 +26,9 @@ const MainLayout = ({ children }) => {
       {/* Header */}
       <Header onMenuClick={() => setSidebarOpen(true)} />
 
-      {/* Main Content */}
-      <main className="lg:ml-64 pt-14 sm:pt-16 pb-16 sm:pb-0 min-h-screen min-w-0 w-full max-w-[100vw] overflow-x-hidden">
-        <div className="w-full max-w-[100vw] min-w-0 px-3 sm:px-6 py-4 sm:py-6 lg:px-6">
+      {/* Main Content: на ПК ширина = экран минус сайдбар, чтобы не вылезало за край */}
+      <main className="lg:ml-64 lg:w-[calc(100vw-16rem)] pt-14 sm:pt-16 pb-16 sm:pb-0 min-h-screen min-w-0 w-full max-w-[100vw] overflow-x-hidden">
+        <div className="w-full max-w-full min-w-0 px-3 sm:px-6 py-4 sm:py-6 lg:px-6">
           {children}
         </div>
       </main>
