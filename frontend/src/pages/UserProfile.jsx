@@ -228,7 +228,7 @@ const UserProfile = ({ username: usernameProp }) => {
               </div>
 
               {!isOwnProfile && (
-                <div className="flex space-x-2">
+                <div className="flex flex-wrap gap-2">
                   {isFriend ? (
                     <>
                       <Button variant="outline" onClick={openChat}>

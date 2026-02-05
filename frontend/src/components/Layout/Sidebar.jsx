@@ -16,7 +16,7 @@ import {
   Shield
 } from 'lucide-react';
 
-const Sidebar = () => {
+const Sidebar = ({ onNavigate }) => {
   const location = useLocation();
   const { user } = useUser();
 
@@ -35,7 +35,7 @@ const Sidebar = () => {
   ];
 
   return (
-    <div className="w-64 bg-card border-r border-border h-screen fixed left-0 top-0 pt-4 px-4 overflow-y-auto">
+    <div className="w-full lg:w-64 bg-card border-r border-border h-full min-h-screen lg:h-screen lg:fixed left-0 top-0 pt-4 px-4 pb-24 lg:pb-4 overflow-y-auto">
       {/* Logo */}
       <div className="mb-8">
         <Link to="/" className="flex items-center space-x-2">
@@ -82,6 +82,7 @@ const Sidebar = () => {
             <Link
               key={item.path}
               to={href}
+              onClick={onNavigate}
               className={`
                 flex items-center space-x-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors
                 ${isActive 
@@ -103,6 +104,7 @@ const Sidebar = () => {
         {user?.is_admin && (
           <Link
             to="/cryadmin"
+            onClick={onNavigate}
             className={`flex items-center space-x-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors mt-2
               ${location.pathname === '/cryadmin' ? 'bg-amber-500/20 text-amber-600 dark:text-amber-400' : 'text-foreground/80 hover:bg-muted'}
             `}
@@ -114,7 +116,7 @@ const Sidebar = () => {
       </nav>
 
       {/* Footer */}
-      <div className="absolute bottom-4 left-4 right-4 text-xs text-muted-foreground">
+      <div className="absolute bottom-4 left-4 right-4 text-xs text-muted-foreground lg:block hidden">
         <p>© 2025 MAKSUM</p>
         <p>Версия 1.0</p>
       </div>

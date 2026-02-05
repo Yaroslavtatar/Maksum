@@ -142,38 +142,42 @@ const SettingsPage = () => {
   return (
     <MainLayout>
       <div className="max-w-6xl mx-auto">
-        <div className="mb-6 animate-slide-down">
-          <h1 className="text-3xl font-bold mb-2">Настройки</h1>
-          <p className="text-gray-600">Управляйте своими настройками и предпочтениями</p>
+        <div className="mb-4 sm:mb-6 animate-slide-down">
+          <h1 className="text-2xl sm:text-3xl font-bold mb-2">Настройки</h1>
+          <p className="text-muted-foreground text-sm sm:text-base">Управляйте своими настройками и предпочтениями</p>
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="grid w-full grid-cols-7">
-            <TabsTrigger value="profile" className="flex items-center gap-2">
+          <TabsList className="flex w-full overflow-x-auto flex-nowrap gap-1 p-1 h-auto min-h-[44px] md:grid md:grid-cols-8">
+            <TabsTrigger value="profile" className="flex items-center gap-2 shrink-0">
               <User className="w-4 h-4" />
               Профиль
             </TabsTrigger>
-            <TabsTrigger value="privacy" className="flex items-center gap-2">
+            <TabsTrigger value="privacy" className="flex items-center gap-2 shrink-0">
               <Lock className="w-4 h-4" />
               Приватность
             </TabsTrigger>
-            <TabsTrigger value="notifications" className="flex items-center gap-2">
+            <TabsTrigger value="chat" className="flex items-center gap-2 shrink-0">
+              <MessageCircle className="w-4 h-4" />
+              Чат
+            </TabsTrigger>
+            <TabsTrigger value="notifications" className="flex items-center gap-2 shrink-0">
               <Bell className="w-4 h-4" />
               Уведомления
             </TabsTrigger>
-            <TabsTrigger value="language" className="flex items-center gap-2">
+            <TabsTrigger value="language" className="flex items-center gap-2 shrink-0">
               <Globe className="w-4 h-4" />
               Язык
             </TabsTrigger>
-            <TabsTrigger value="theme" className="flex items-center gap-2">
+            <TabsTrigger value="theme" className="flex items-center gap-2 shrink-0">
               <Palette className="w-4 h-4" />
               Тема
             </TabsTrigger>
-            <TabsTrigger value="security" className="flex items-center gap-2">
+            <TabsTrigger value="security" className="flex items-center gap-2 shrink-0">
               <Shield className="w-4 h-4" />
               Безопасность
             </TabsTrigger>
-            <TabsTrigger value="apps" className="flex items-center gap-2">
+            <TabsTrigger value="apps" className="flex items-center gap-2 shrink-0">
               <Smartphone className="w-4 h-4" />
               Приложения
             </TabsTrigger>

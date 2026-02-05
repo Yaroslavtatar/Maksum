@@ -17,7 +17,8 @@ import {
   Mic,
   Square,
   Play,
-  Pause
+  Pause,
+  ArrowLeft
 } from 'lucide-react';
 
 // Формат длительности в минутах:секундах
@@ -335,9 +336,9 @@ const MessagesPage = () => {
 
   return (
     <MainLayout>
-      <div className="h-[calc(100vh-6rem)] flex min-h-0 max-w-full">
-        {/* Chat List */}
-        <Card className="w-80 shrink-0 mr-4 flex flex-col min-h-0 overflow-hidden">
+      <div className="h-[calc(100vh-5rem)] sm:h-[calc(100vh-6rem)] flex min-h-0 max-w-full">
+        {/* Chat List — на мобильном скрыт при открытом чате */}
+        <Card className={`w-full md:w-80 shrink-0 mr-0 md:mr-4 flex flex-col min-h-0 overflow-hidden transition-all ${selectedConversation ? 'hidden md:flex' : 'flex'}`}>
           <CardHeader className="pb-3">
             <CardTitle className="text-lg">Сообщения</CardTitle>
             <div className="relative">
@@ -413,17 +414,26 @@ const MessagesPage = () => {
           </CardContent>
         </Card>
 
-        {/* Chat Window */}
+        {/* Chat Window — на мобильном показывается только при выбранном чате */}
         {selectedConversation ? (
-          <Card className="flex-1 flex flex-col min-h-0 overflow-hidden min-w-0">
+          <Card className={`flex-1 flex flex-col min-h-0 overflow-hidden min-w-0 ${!selectedConversation ? 'hidden' : ''}`}>
             <CardHeader className="pb-3 border-b shrink-0">
-              <div className="flex items-center space-x-3">
-                <Avatar>
+              <div className="flex items-center gap-2 sm:gap-3">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="md:hidden shrink-0 h-9 w-9"
+                  onClick={() => setSelectedConversation(null)}
+                  aria-label="Назад к списку"
+                >
+                  <ArrowLeft className="h-5 w-5" />
+                </Button>
+                <Avatar className="w-10 h-10 sm:w-12 sm:h-12 shrink-0">
                   <AvatarImage src={selectedConversation.other_avatar} alt={selectedConversation.other_username} />
                   <AvatarFallback>{(selectedConversation.other_username || 'U')[0].toUpperCase()}</AvatarFallback>
                 </Avatar>
-                <div>
-                  <CardTitle className="text-lg">{selectedConversation.other_username || 'Группа'}</CardTitle>
+                <div className="min-w-0 flex-1">
+                  <CardTitle className="text-base sm:text-lg truncate">{selectedConversation.other_username || 'Группа'}</CardTitle>
                 </div>
               </div>
             </CardHeader>
@@ -486,7 +496,7 @@ const MessagesPage = () => {
                 )}
                 <div ref={messagesEndRef} />
               </div>
-              <form onSubmit={handleSendMessage} className="p-4 border-t flex items-center gap-2 shrink-0">
+              <form onSubmit={handleSendMessage} className="p-3 sm:p-4 border-t flex items-center gap-2 shrink-0">
                 {recording ? (
                   <>
                     <Button type="button" variant="destructive" size="icon" onClick={stopRecording} disabled={recordingStopping} title="Остановить запись">
@@ -519,7 +529,7 @@ const MessagesPage = () => {
             </CardContent>
           </Card>
         ) : (
-          <Card className="flex-1 flex flex-col animate-slide-left">
+          <Card className="hidden md:flex flex-1 flex-col animate-slide-left">
             <CardContent className="flex-1 flex items-center justify-center">
               <div className="text-center">
                 <div className="animate-pulse-gentle mb-6">

@@ -19,10 +19,11 @@ import {
   Settings, 
   LogOut, 
   User,
-  Plus
+  Plus,
+  Menu
 } from 'lucide-react';
 
-const Header = () => {
+const Header = ({ onMenuClick }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const navigate = useNavigate();
@@ -60,28 +61,40 @@ const Header = () => {
   };
 
   return (
-    <header className="bg-card border-b border-border fixed top-0 left-64 right-0 z-40 h-16">
-      <div className="flex items-center justify-between h-full px-6">
+    <header className="bg-card border-b border-border fixed top-0 left-0 lg:left-64 right-0 z-40 h-14 sm:h-16 safe-area-inset-top">
+      <div className="flex items-center justify-between h-full gap-2 px-3 sm:px-6">
+        {/* Mobile menu button */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="shrink-0 lg:hidden h-10 w-10 min-h-[44px] min-w-[44px]"
+          onClick={onMenuClick}
+          aria-label="Открыть меню"
+        >
+          <Menu className="h-5 w-5" />
+        </Button>
+
         {/* Search Bar */}
-        <div className="flex-1 max-w-lg">
+        <div className="flex-1 min-w-0 max-w-lg">
           <form onSubmit={handleSearch} className="relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
+            <Search className="absolute left-2 sm:left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4 shrink-0" />
             <Input
               type="text"
-              placeholder="Поиск людей, сообществ, записей..."
+              placeholder="Поиск..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10 bg-muted border-0 focus:bg-background focus:ring-2 focus:ring-primary"
+              className="pl-8 sm:pl-10 bg-muted border-0 focus:bg-background focus:ring-2 focus:ring-primary text-base min-h-[44px] sm:min-h-0"
             />
           </form>
         </div>
 
         {/* Right Side Actions */}
-        <div className="flex items-center space-x-4">
-          {/* Create Post Button */}
+        <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+          {/* Create Post - icon only on small */}
           <Button 
             variant="outline" 
             size="sm"
+            className="min-h-[44px] min-w-[44px] sm:min-w-0 sm:px-3"
             onClick={() => {
               // Фокус на поле создания поста на главной странице
               if (window.location.pathname === '/') {
@@ -91,15 +104,14 @@ const Header = () => {
                 setTimeout(() => document.querySelector('textarea')?.focus(), 100);
               }
             }}
-            className="flex items-center space-x-2"
           >
-            <Plus className="w-4 h-4" />
-            <span>Создать</span>
+            <Plus className="w-4 h-4 sm:mr-1" />
+            <span className="hidden sm:inline">Создать</span>
           </Button>
 
           {/* Notifications */}
-          <Link to="/notifications" className="relative">
-            <Button variant="ghost" size="sm" className="relative">
+          <Link to="/notifications" className="relative flex items-center">
+            <Button variant="ghost" size="icon" className="relative h-10 w-10 min-h-[44px] min-w-[44px] sm:h-8 sm:w-8 sm:min-h-0 sm:min-w-0">
               <Bell className="w-5 h-5" />
               {unreadNotifications > 0 && (
                 <span className="absolute -top-1 -right-1 bg-destructive text-destructive-foreground text-xs rounded-full min-w-[20px] h-5 flex items-center justify-center px-1">
@@ -110,8 +122,8 @@ const Header = () => {
           </Link>
 
           {/* Messages */}
-          <Link to="/messages">
-            <Button variant="ghost" size="sm">
+          <Link to="/messages" className="flex items-center">
+            <Button variant="ghost" size="icon" className="h-10 w-10 min-h-[44px] min-w-[44px] sm:h-8 sm:w-8 sm:min-h-0 sm:min-w-0 rounded-full">
               <MessageCircle className="w-5 h-5" />
             </Button>
           </Link>
@@ -119,7 +131,7 @@ const Header = () => {
           {/* User Menu */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" className="relative h-8 w-8 rounded-full">
+              <Button variant="ghost" className="relative h-10 w-10 min-h-[44px] min-w-[44px] sm:h-8 sm:w-8 sm:min-h-0 sm:min-w-0 rounded-full">
                 <Avatar className="h-8 w-8">
                   <AvatarImage src={user?.avatar_url} alt={user?.username} />
                   <AvatarFallback>{(user?.username || 'U')[0].toUpperCase()}</AvatarFallback>

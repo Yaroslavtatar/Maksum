@@ -190,16 +190,36 @@ code {
 @layer base {
   * {
     @apply border-border;
-    }
+  }
   
   html {
     @apply h-full;
+    -webkit-text-size-adjust: 100%;
   }
   
   body {
     @apply bg-background text-foreground;
     transition: background-color 0.3s ease, color 0.3s ease;
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+    padding-bottom: env(safe-area-inset-bottom);
+    overflow-x: hidden;
   }
+}
+
+/* На мобильных отключаем hover-подъём карточек, чтобы не было дергания при тапе */
+@media (hover: none) {
+  .card:hover {
+    transform: none;
+  }
+}
+
+/* Адаптация под мобильные: зоны безопасного отступа */
+.safe-area-inset-top {
+  padding-top: env(safe-area-inset-top, 0);
+}
+.safe-area-inset-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0);
 }
 
 /* Custom Animations */
