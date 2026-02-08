@@ -221,6 +221,8 @@ class UserSearchResponse(BaseModel):
     email: str
     avatar_url: Optional[str] = None
     status: str = "offline"  # online | inactive | offline
+    is_official: bool = False
+    is_moderator: bool = False
 
 class FriendAction(BaseModel):
     user_id: int
@@ -288,6 +290,8 @@ class ImageUpload(BaseModel):
 class AdminUserUpdate(BaseModel):
     is_banned: Optional[bool] = None
     is_admin: Optional[bool] = None
+    is_official: Optional[bool] = None
+    is_moderator: Optional[bool] = None
 
 class UserFullProfile(BaseModel):
     id: int
@@ -766,14 +770,14 @@ async def get_me(user_id: int = Depends(get_current_user_id)):
     async with get_db() as conn:
         if db_type == 'postgresql':
             row = await conn.fetchrow(
-                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, is_admin, is_banned, last_seen, hide_phone, hide_email, chat_welcome_text, chat_welcome_media_url FROM users WHERE id = $1",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, is_admin, is_banned, is_official, is_moderator, last_seen, hide_phone, hide_email, chat_welcome_text, chat_welcome_media_url FROM users WHERE id = $1",
                 user_id
             )
             if row:
                 row = dict(row)
         else:  # sqlite
             async with conn.execute(
-                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, is_admin, is_banned, last_seen, hide_phone, hide_email, chat_welcome_text, chat_welcome_media_url FROM users WHERE id = ?",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, is_admin, is_banned, is_official, is_moderator, last_seen, hide_phone, hide_email, chat_welcome_text, chat_welcome_media_url FROM users WHERE id = ?",
                 (user_id,)
             ) as cursor:
                 row_data = await cursor.fetchone()
@@ -794,11 +798,13 @@ async def get_me(user_id: int = Depends(get_current_user_id)):
                         "community_description": row_data[12] if len(row_data) > 12 else None,
                         "is_admin": bool(row_data[13]) if len(row_data) > 13 else False,
                         "is_banned": bool(row_data[14]) if len(row_data) > 14 else False,
-                        "last_seen": row_data[15] if len(row_data) > 15 else None,
-                        "hide_phone": bool(row_data[16]) if len(row_data) > 16 else False,
-                        "hide_email": bool(row_data[17]) if len(row_data) > 17 else False,
-                        "chat_welcome_text": row_data[18] if len(row_data) > 18 else None,
-                        "chat_welcome_media_url": row_data[19] if len(row_data) > 19 else None,
+                        "is_official": bool(row_data[15]) if len(row_data) > 15 else False,
+                        "is_moderator": bool(row_data[16]) if len(row_data) > 16 else False,
+                        "last_seen": row_data[17] if len(row_data) > 17 else None,
+                        "hide_phone": bool(row_data[18]) if len(row_data) > 18 else False,
+                        "hide_email": bool(row_data[19]) if len(row_data) > 19 else False,
+                        "chat_welcome_text": row_data[20] if len(row_data) > 20 else None,
+                        "chat_welcome_media_url": row_data[21] if len(row_data) > 21 else None,
                     }
                 else:
                     row = None
@@ -972,14 +978,14 @@ async def get_user_by_username(username: str, _uid: int = Depends(get_current_us
     async with get_db() as conn:
         if db_type == 'postgresql':
             row = await conn.fetchrow(
-                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, last_seen, hide_phone, hide_email FROM users WHERE username = $1",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, is_official, is_moderator, last_seen, hide_phone, hide_email FROM users WHERE username = $1",
                 username
             )
             if row:
                 row = dict(row)
         else:  # sqlite
             async with conn.execute(
-                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, last_seen, hide_phone, hide_email FROM users WHERE username = ?",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, is_official, is_moderator, last_seen, hide_phone, hide_email FROM users WHERE username = ?",
                 (username,)
             ) as cursor:
                 row_data = await cursor.fetchone()
@@ -998,9 +1004,11 @@ async def get_user_by_username(username: str, _uid: int = Depends(get_current_us
                         "profile_accent": row_data[10] if len(row_data) > 10 else None,
                         "community_name": row_data[11] if len(row_data) > 11 else None,
                         "community_description": row_data[12] if len(row_data) > 12 else None,
-                        "last_seen": row_data[13] if len(row_data) > 13 else None,
-                        "hide_phone": bool(row_data[14]) if len(row_data) > 14 else False,
-                        "hide_email": bool(row_data[15]) if len(row_data) > 15 else False,
+                        "is_official": bool(row_data[13]) if len(row_data) > 13 else False,
+                        "is_moderator": bool(row_data[14]) if len(row_data) > 14 else False,
+                        "last_seen": row_data[15] if len(row_data) > 15 else None,
+                        "hide_phone": bool(row_data[16]) if len(row_data) > 16 else False,
+                        "hide_email": bool(row_data[17]) if len(row_data) > 17 else False,
                     }
                 else:
                     row = None
@@ -1025,39 +1033,46 @@ async def search_users(q: Optional[str] = None, _uid: int = Depends(get_current_
             if q and q.strip():
                 like = f"%{q.strip()}%"
                 rows = await conn.fetch(
-                    """SELECT id, username, email, avatar_url, last_seen FROM users
+                    """SELECT id, username, email, avatar_url, last_seen,
+                       COALESCE(is_official, FALSE) AS is_official, COALESCE(is_moderator, FALSE) AS is_moderator
+                       FROM users
                        WHERE id != $1 AND (is_banned IS NOT TRUE OR is_banned IS NULL)
                        AND username ILIKE $2 ORDER BY username LIMIT 50""",
                     _uid, like
                 )
             else:
                 rows = await conn.fetch(
-                    """SELECT id, username, email, avatar_url, last_seen FROM users
+                    """SELECT id, username, email, avatar_url, last_seen,
+                       COALESCE(is_official, FALSE) AS is_official, COALESCE(is_moderator, FALSE) AS is_moderator
+                       FROM users
                        WHERE id != $1 AND (is_banned IS NOT TRUE OR is_banned IS NULL)
                        ORDER BY id DESC LIMIT 50""",
                     _uid
                 )
             rows = [dict(r) for r in rows]
+            for r in rows:
+                r.setdefault("is_official", False)
+                r.setdefault("is_moderator", False)
         else:
             if q and q.strip():
                 like = f"%{q.strip()}%"
                 async with conn.execute(
-                    """SELECT id, username, email, avatar_url, last_seen FROM users
+                    """SELECT id, username, email, avatar_url, last_seen, COALESCE(is_official, 0), COALESCE(is_moderator, 0) FROM users
                        WHERE id != ? AND (is_banned = 0 OR is_banned IS NULL)
                        AND username LIKE ? ORDER BY username LIMIT 50""",
                     (_uid, like)
                 ) as cursor:
                     rows_data = await cursor.fetchall()
-                    rows = [{"id": r[0], "username": r[1], "email": r[2], "avatar_url": r[3], "last_seen": r[4] if len(r) > 4 else None} for r in rows_data]
+                    rows = [{"id": r[0], "username": r[1], "email": r[2], "avatar_url": r[3], "last_seen": r[4] if len(r) > 4 else None, "is_official": bool(r[5]) if len(r) > 5 else False, "is_moderator": bool(r[6]) if len(r) > 6 else False} for r in rows_data]
             else:
                 async with conn.execute(
-                    """SELECT id, username, email, avatar_url, last_seen FROM users
+                    """SELECT id, username, email, avatar_url, last_seen, COALESCE(is_official, 0), COALESCE(is_moderator, 0) FROM users
                        WHERE id != ? AND (is_banned = 0 OR is_banned IS NULL)
                        ORDER BY id DESC LIMIT 50""",
                     (_uid,)
                 ) as cursor:
                     rows_data = await cursor.fetchall()
-                    rows = [{"id": r[0], "username": r[1], "email": r[2], "avatar_url": r[3], "last_seen": r[4] if len(r) > 4 else None} for r in rows_data]
+                    rows = [{"id": r[0], "username": r[1], "email": r[2], "avatar_url": r[3], "last_seen": r[4] if len(r) > 4 else None, "is_official": bool(r[5]) if len(r) > 5 else False, "is_moderator": bool(r[6]) if len(r) > 6 else False} for r in rows_data]
         for r in rows:
             r["status"] = get_status_from_last_seen(r.get("last_seen"))
         return [UserSearchResponse(**r) for r in rows]
@@ -1070,14 +1085,14 @@ async def get_user_by_id(id: int, _uid: int = Depends(get_current_user_id)):
     async with get_db() as conn:
         if db_type == 'postgresql':
             row = await conn.fetchrow(
-                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, last_seen, hide_phone, hide_email FROM users WHERE id = $1",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, is_official, is_moderator, last_seen, hide_phone, hide_email FROM users WHERE id = $1",
                 id
             )
             if row:
                 row = dict(row)
         else:  # sqlite
             async with conn.execute(
-                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, last_seen, hide_phone, hide_email FROM users WHERE id = ?",
+                "SELECT id, username, email, avatar_url, cover_photo, bio, location, birth_date, phone, work_hours, profile_accent, community_name, community_description, is_official, is_moderator, last_seen, hide_phone, hide_email FROM users WHERE id = ?",
                 (id,)
             ) as cursor:
                 row_data = await cursor.fetchone()
@@ -1096,9 +1111,11 @@ async def get_user_by_id(id: int, _uid: int = Depends(get_current_user_id)):
                         "profile_accent": row_data[10] if len(row_data) > 10 else None,
                         "community_name": row_data[11] if len(row_data) > 11 else None,
                         "community_description": row_data[12] if len(row_data) > 12 else None,
-                        "last_seen": row_data[13] if len(row_data) > 13 else None,
-                        "hide_phone": bool(row_data[14]) if len(row_data) > 14 else False,
-                        "hide_email": bool(row_data[15]) if len(row_data) > 15 else False,
+                        "is_official": bool(row_data[13]) if len(row_data) > 13 else False,
+                        "is_moderator": bool(row_data[14]) if len(row_data) > 14 else False,
+                        "last_seen": row_data[15] if len(row_data) > 15 else None,
+                        "hide_phone": bool(row_data[16]) if len(row_data) > 16 else False,
+                        "hide_email": bool(row_data[17]) if len(row_data) > 17 else False,
                     }
                 else:
                     row = None
@@ -1871,7 +1888,7 @@ async def get_feed(user_id: int = Depends(get_current_user_id)):
             rows = await conn.fetch(
                 """
                 SELECT p.id, p.author_id, p.content, p.images, p.likes_count, p.comments_count, p.created_at,
-                       u.username, u.avatar_url,
+                       u.username, u.avatar_url, COALESCE(u.is_official, FALSE) AS is_official, COALESCE(u.is_moderator, FALSE) AS is_moderator,
                        EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = $1) as liked
                 FROM posts p
                 JOIN users u ON u.id = p.author_id
@@ -1885,7 +1902,7 @@ async def get_feed(user_id: int = Depends(get_current_user_id)):
             async with conn.execute(
                 """
                 SELECT p.id, p.author_id, p.content, p.images, p.likes_count, p.comments_count, p.created_at,
-                       u.username, u.avatar_url,
+                       u.username, u.avatar_url, COALESCE(u.is_official, 0), COALESCE(u.is_moderator, 0),
                        EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = ?) as liked
                 FROM posts p
                 JOIN users u ON u.id = p.author_id
@@ -1899,7 +1916,8 @@ async def get_feed(user_id: int = Depends(get_current_user_id)):
                     {
                         "id": r[0], "author_id": r[1], "content": r[2], "images": r[3],
                         "likes_count": r[4], "comments_count": r[5], "created_at": r[6],
-                        "username": r[7], "avatar_url": r[8], "liked": bool(r[9])
+                        "username": r[7], "avatar_url": r[8], "is_official": bool(r[9]), "is_moderator": bool(r[10]),
+                        "liked": bool(r[11])
                     }
                     for r in rows_data
                 ]
@@ -1912,6 +1930,8 @@ async def get_feed(user_id: int = Depends(get_current_user_id)):
             "author_id": r["author_id"],
             "author_username": r["username"],
             "author_avatar": r["avatar_url"],
+            "author_is_official": r.get("is_official", False),
+            "author_is_moderator": r.get("is_moderator", False),
             "content": r["content"],
             "images": json.loads(r["images"]) if r["images"] else [],
             "likes": r["likes_count"],
@@ -3155,32 +3175,32 @@ async def admin_list_users(
         if db_type == 'postgresql':
             if search:
                 rows = await conn.fetch(
-                    """SELECT id, username, email, avatar_url, is_admin, is_banned, created_at
+                    """SELECT id, username, email, avatar_url, is_admin, is_banned, is_official, is_moderator, created_at
                        FROM users WHERE username ILIKE $1 OR email ILIKE $1 ORDER BY id LIMIT $2 OFFSET $3""",
                     f"%{search}%", limit, skip
                 )
             else:
                 rows = await conn.fetch(
-                    "SELECT id, username, email, avatar_url, is_admin, is_banned, created_at FROM users ORDER BY id LIMIT $1 OFFSET $2",
+                    "SELECT id, username, email, avatar_url, is_admin, is_banned, is_official, is_moderator, created_at FROM users ORDER BY id LIMIT $1 OFFSET $2",
                     limit, skip
                 )
             out = [dict(r) for r in rows]
         else:
             if search:
                 async with conn.execute(
-                    """SELECT id, username, email, avatar_url, is_admin, is_banned, created_at
+                    """SELECT id, username, email, avatar_url, is_admin, is_banned, is_official, is_moderator, created_at
                        FROM users WHERE username LIKE ? OR email LIKE ? ORDER BY id LIMIT ? OFFSET ?""",
                     (f"%{search}%", f"%{search}%", limit, skip)
                 ) as cursor:
                     rows = await cursor.fetchall()
             else:
                 async with conn.execute(
-                    "SELECT id, username, email, avatar_url, is_admin, is_banned, created_at FROM users ORDER BY id LIMIT ? OFFSET ?",
+                    "SELECT id, username, email, avatar_url, is_admin, is_banned, is_official, is_moderator, created_at FROM users ORDER BY id LIMIT ? OFFSET ?",
                     (limit, skip)
                 ) as cursor:
                     rows = await cursor.fetchall()
             out = [
-                {"id": r[0], "username": r[1], "email": r[2], "avatar_url": r[3], "is_admin": bool(r[4]) if len(r) > 4 else False, "is_banned": bool(r[5]) if len(r) > 5 else False, "created_at": r[6] if len(r) > 6 else None}
+                {"id": r[0], "username": r[1], "email": r[2], "avatar_url": r[3], "is_admin": bool(r[4]) if len(r) > 4 else False, "is_banned": bool(r[5]) if len(r) > 5 else False, "is_official": bool(r[6]) if len(r) > 6 else False, "is_moderator": bool(r[7]) if len(r) > 7 else False, "created_at": r[8] if len(r) > 8 else None}
                 for r in rows
             ]
     return {"users": out, "skip": skip, "limit": limit}
@@ -3192,17 +3212,17 @@ async def admin_get_user(user_id: int, _admin_id: int = Depends(get_current_admi
     async with get_db() as conn:
         if db_type == 'postgresql':
             row = await conn.fetchrow(
-                "SELECT id, username, email, avatar_url, bio, is_admin, is_banned, community_name, community_description, created_at FROM users WHERE id = $1",
+                "SELECT id, username, email, avatar_url, bio, is_admin, is_banned, is_official, is_moderator, community_name, community_description, created_at FROM users WHERE id = $1",
                 user_id
             )
             out = dict(row) if row else None
         else:
             async with conn.execute(
-                "SELECT id, username, email, avatar_url, bio, is_admin, is_banned, community_name, community_description, created_at FROM users WHERE id = ?",
+                "SELECT id, username, email, avatar_url, bio, is_admin, is_banned, is_official, is_moderator, community_name, community_description, created_at FROM users WHERE id = ?",
                 (user_id,)
             ) as cursor:
                 r = await cursor.fetchone()
-            out = {"id": r[0], "username": r[1], "email": r[2], "avatar_url": r[3], "bio": r[4] if len(r) > 4 else None, "is_admin": bool(r[5]) if len(r) > 5 else False, "is_banned": bool(r[6]) if len(r) > 6 else False, "community_name": r[7] if len(r) > 7 else None, "community_description": r[8] if len(r) > 8 else None, "created_at": r[9] if len(r) > 9 else None} if r else None
+            out = {"id": r[0], "username": r[1], "email": r[2], "avatar_url": r[3], "bio": r[4] if len(r) > 4 else None, "is_admin": bool(r[5]) if len(r) > 5 else False, "is_banned": bool(r[6]) if len(r) > 6 else False, "is_official": bool(r[7]) if len(r) > 7 else False, "is_moderator": bool(r[8]) if len(r) > 8 else False, "community_name": r[9] if len(r) > 9 else None, "community_description": r[10] if len(r) > 10 else None, "created_at": r[11] if len(r) > 11 else None} if r else None
     if not out:
         raise HTTPException(status_code=404, detail="User not found")
     return out
@@ -3216,6 +3236,10 @@ async def admin_update_user(user_id: int, data: AdminUserUpdate, _admin_id: int 
         updates.append(("is_banned", data.is_banned))
     if data.is_admin is not None:
         updates.append(("is_admin", data.is_admin))
+    if data.is_official is not None:
+        updates.append(("is_official", data.is_official))
+    if data.is_moderator is not None:
+        updates.append(("is_moderator", data.is_moderator))
     if not updates:
         return {"ok": True}
     async with get_db() as conn:

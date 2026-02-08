@@ -7,6 +7,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '../components/ui/avatar';
 import api from '../api/axios';
 import { useUser } from '../context/UserContext';
 import StatusBadge from '../components/Profile/StatusBadge';
+import UserBadges from '../components/Profile/UserBadges';
 import PostCard from '../components/Feed/PostCard';
 import { UserPlus, MessageCircle, Loader2, MapPin, Calendar, Phone } from 'lucide-react';
 
@@ -165,7 +166,10 @@ const UserProfile = ({ username: usernameProp }) => {
             <div className="flex justify-between items-start">
               <div className="flex-1">
                 <div className="flex items-center space-x-3 mb-2">
-                  <h1 className="text-2xl font-bold">{user.username}</h1>
+                  <h1 className="text-2xl font-bold flex items-center gap-2">
+                    {user.username}
+                    <UserBadges isOfficial={user.is_official} isModerator={user.is_moderator} className="shrink-0" />
+                  </h1>
                   <StatusBadge status={user.status} />
                 </div>
                 {user.email && <p className="text-muted-foreground mb-4">{user.email}</p>}

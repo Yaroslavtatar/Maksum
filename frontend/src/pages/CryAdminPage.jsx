@@ -6,7 +6,8 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { Users, FileText, Building2, Shield, Ban, Trash2, Search, AlertCircle, BarChart3, MessageCircle, Heart, Bell, UserCheck } from 'lucide-react';
+import { Users, FileText, Building2, Shield, Ban, Trash2, Search, AlertCircle, BarChart3, MessageCircle, Heart, Bell, UserCheck, BadgeCheck, Wrench } from 'lucide-react';
+import UserBadges from '../components/Profile/UserBadges';
 
 const CryAdminPage = () => {
   const { user, loading: userLoading } = useUser();
@@ -102,6 +103,24 @@ const CryAdminPage = () => {
   const handleSetAdmin = async (userId, isAdmin) => {
     try {
       await api.patch(`/admin/users/${userId}`, { is_admin: isAdmin });
+      loadUsers();
+    } catch (e) {
+      setError(e?.response?.data?.detail || 'Ошибка');
+    }
+  };
+
+  const handleSetOfficial = async (userId, isOfficial) => {
+    try {
+      await api.patch(`/admin/users/${userId}`, { is_official: isOfficial });
+      loadUsers();
+    } catch (e) {
+      setError(e?.response?.data?.detail || 'Ошибка');
+    }
+  };
+
+  const handleSetModerator = async (userId, isModerator) => {
+    try {
+      await api.patch(`/admin/users/${userId}`, { is_moderator: isModerator });
       loadUsers();
     } catch (e) {
       setError(e?.response?.data?.detail || 'Ошибка');
@@ -298,6 +317,8 @@ const CryAdminPage = () => {
                           <th className="text-left py-2">Логин</th>
                           <th className="text-left py-2">Email</th>
                           <th className="text-left py-2">Админ</th>
+                          <th className="text-left py-2">Офиц.</th>
+                          <th className="text-left py-2">Модератор</th>
                           <th className="text-left py-2">Бан</th>
                           <th className="text-left py-2">Действия</th>
                         </tr>
@@ -306,9 +327,26 @@ const CryAdminPage = () => {
                         {users.map((u) => (
                           <tr key={u.id} className="border-b dark:border-gray-700">
                             <td className="py-2">{u.id}</td>
-                            <td className="py-2">{u.username}</td>
+                            <td className="py-2 flex items-center gap-1">
+                              {u.username}
+                              <UserBadges isOfficial={u.is_official} isModerator={u.is_moderator} />
+                            </td>
                             <td className="py-2">{u.email}</td>
                             <td className="py-2">{u.is_admin ? 'Да' : 'Нет'}</td>
+                            <td className="py-2">
+                              {u.id !== user?.id ? (
+                                <Button size="sm" variant={u.is_official ? 'secondary' : 'outline'} onClick={() => handleSetOfficial(u.id, !u.is_official)} title="Официальный профиль">
+                                  <BadgeCheck className={`w-3 h-3 ${u.is_official ? 'text-blue-500' : ''}`} />
+                                </Button>
+                              ) : '—'}
+                            </td>
+                            <td className="py-2">
+                              {u.id !== user?.id ? (
+                                <Button size="sm" variant={u.is_moderator ? 'secondary' : 'outline'} onClick={() => handleSetModerator(u.id, !u.is_moderator)} title="Модератор">
+                                  <Wrench className={`w-3 h-3 ${u.is_moderator ? 'text-amber-500' : ''}`} />
+                                </Button>
+                              ) : '—'}
+                            </td>
                             <td className="py-2">{u.is_banned ? 'Забанен' : '—'}</td>
                             <td className="py-2 flex gap-2">
                               {u.id !== user?.id && (

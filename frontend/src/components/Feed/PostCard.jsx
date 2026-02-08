@@ -20,6 +20,7 @@ import {
 } from '../ui/dropdown-menu';
 import api from '../../api/axios';
 import { useUser } from '../../context/UserContext';
+import UserBadges from '../Profile/UserBadges';
 
 const PostCard = ({ post, onLike, onAuthorClick, onCommentAdded }) => {
   const { user } = useUser();
@@ -62,6 +63,8 @@ const PostCard = ({ post, onLike, onAuthorClick, onCommentAdded }) => {
   const authorName = post.author?.name || post.author_username || 'Пользователь';
   const authorAvatar = post.author?.avatar || post.author_avatar;
   const authorId = post.author_id ?? post.author?.id;
+  const authorIsOfficial = post.author_is_official ?? post.author?.is_official ?? false;
+  const authorIsModerator = post.author_is_moderator ?? post.author?.is_moderator ?? false;
   const timestamp = post.timestamp || (post.created_at ? new Date(post.created_at).toLocaleString('ru-RU') : '');
 
   const authorBlock = (
@@ -71,7 +74,10 @@ const PostCard = ({ post, onLike, onAuthorClick, onCommentAdded }) => {
         <AvatarFallback>{(authorName || 'U')[0].toUpperCase()}</AvatarFallback>
       </Avatar>
       <div>
-        <p className={`font-medium text-sm ${onAuthorClick && authorId ? 'cursor-pointer hover:text-primary' : ''}`}>{authorName}</p>
+        <p className={`font-medium text-sm flex items-center gap-1 ${onAuthorClick && authorId ? 'cursor-pointer hover:text-primary' : ''}`}>
+          {authorName}
+          <UserBadges isOfficial={authorIsOfficial} isModerator={authorIsModerator} />
+        </p>
         <p className="text-xs text-muted-foreground">{timestamp}</p>
       </div>
     </div>

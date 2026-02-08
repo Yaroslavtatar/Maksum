@@ -352,6 +352,8 @@ async def init_db():
                 await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMP NULL")
                 await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_token VARCHAR(255) NULL")
                 await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_sent_at TIMESTAMP NULL")
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_official BOOLEAN DEFAULT FALSE")
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_moderator BOOLEAN DEFAULT FALSE")
             except Exception:
                 pass
 
@@ -647,6 +649,10 @@ async def init_db():
                     await conn.execute("ALTER TABLE users ADD COLUMN hide_phone BOOLEAN DEFAULT 0")
                 if 'hide_email' not in columns:
                     await conn.execute("ALTER TABLE users ADD COLUMN hide_email BOOLEAN DEFAULT 0")
+                if 'is_official' not in columns:
+                    await conn.execute("ALTER TABLE users ADD COLUMN is_official BOOLEAN DEFAULT 0")
+                if 'is_moderator' not in columns:
+                    await conn.execute("ALTER TABLE users ADD COLUMN is_moderator BOOLEAN DEFAULT 0")
             except Exception as e:
                 logger.warning(f"Миграция колонок users: {e}")
 

@@ -12,6 +12,7 @@ import {
 } from '../ui/dropdown-menu';
 import { useUser } from '../../context/UserContext';
 import api from '../../api/axios';
+import UserBadges from '../Profile/UserBadges';
 import { 
   Search, 
   Bell, 
@@ -141,7 +142,10 @@ const Header = ({ onMenuClick }) => {
             <DropdownMenuContent className="w-56" align="end" forceMount>
               <div className="flex items-center justify-start gap-2 p-2">
                 <div className="flex flex-col space-y-1 leading-none">
-                  <p className="font-medium text-sm">{user?.username || 'Пользователь'}</p>
+                  <p className="font-medium text-sm flex items-center gap-1">
+                    {user?.username || 'Пользователь'}
+                    <UserBadges isOfficial={user?.is_official} isModerator={user?.is_moderator} />
+                  </p>
                   <p className="w-[200px] truncate text-xs text-muted-foreground">
                     {user?.email || ''}
                   </p>

@@ -5,6 +5,7 @@ import { Button } from '../ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
 import api from '../../api/axios';
 import StatusBadge from './StatusBadge';
+import UserBadges from './UserBadges';
 import {
   Phone,
   Calendar,
@@ -69,7 +70,10 @@ const UserPreviewModal = ({ userId, open, onClose }) => {
                 </AvatarFallback>
               </Avatar>
               <div className="mt-3 flex items-center gap-2 flex-wrap">
-                <h2 className="text-xl font-bold text-foreground">{user.username}</h2>
+                <h2 className="text-xl font-bold text-foreground flex items-center gap-1">
+                  {user.username}
+                  <UserBadges isOfficial={user.is_official} isModerator={user.is_moderator} />
+                </h2>
                 <StatusBadge status={user.status} className="text-xs" />
               </div>
 

@@ -8,6 +8,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../api/axios';
 import { Search, UserPlus, MessageCircle, Loader2, AlertCircle } from 'lucide-react';
 import StatusBadge from '../components/Profile/StatusBadge';
+import UserBadges from '../components/Profile/UserBadges';
 
 const UsersPage = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -134,7 +135,10 @@ const UsersPage = () => {
                   </Avatar>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-medium truncate">{u.username}</span>
+                      <span className="font-medium truncate flex items-center gap-1">
+                        {u.username}
+                        <UserBadges isOfficial={u.is_official} isModerator={u.is_moderator} />
+                      </span>
                       <StatusBadge status={u.status} className="text-xs shrink-0" />
                     </div>
                     <div className="text-sm text-muted-foreground truncate">{u.email}</div>
