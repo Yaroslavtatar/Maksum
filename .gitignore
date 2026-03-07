@@ -77,6 +77,10 @@ mail.env
 backend/mail.env
 !mail.env.example
 !backend/mail.env.example
+telegram.env
+backend/telegram.env
+!telegram.env.example
+!backend/telegram.env.example
 
 # ============ Временные и артефакты ============
 *.tmp

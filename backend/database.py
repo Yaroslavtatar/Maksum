@@ -354,6 +354,10 @@ async def init_db():
                 await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_sent_at TIMESTAMP NULL")
                 await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_official BOOLEAN DEFAULT FALSE")
                 await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_moderator BOOLEAN DEFAULT FALSE")
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_verified_at TIMESTAMP NULL")
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_chat_id BIGINT NULL")
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_verification_token VARCHAR(64) NULL")
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_token_created_at TIMESTAMP NULL")
             except Exception:
                 pass
 
@@ -653,6 +657,14 @@ async def init_db():
                     await conn.execute("ALTER TABLE users ADD COLUMN is_official BOOLEAN DEFAULT 0")
                 if 'is_moderator' not in columns:
                     await conn.execute("ALTER TABLE users ADD COLUMN is_moderator BOOLEAN DEFAULT 0")
+                if 'telegram_verified_at' not in columns:
+                    await conn.execute("ALTER TABLE users ADD COLUMN telegram_verified_at DATETIME NULL")
+                if 'telegram_chat_id' not in columns:
+                    await conn.execute("ALTER TABLE users ADD COLUMN telegram_chat_id INTEGER NULL")
+                if 'telegram_verification_token' not in columns:
+                    await conn.execute("ALTER TABLE users ADD COLUMN telegram_verification_token VARCHAR(64) NULL")
+                if 'telegram_token_created_at' not in columns:
+                    await conn.execute("ALTER TABLE users ADD COLUMN telegram_token_created_at DATETIME NULL")
             except Exception as e:
                 logger.warning(f"Миграция колонок users: {e}")
 

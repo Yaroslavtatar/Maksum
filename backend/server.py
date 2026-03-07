@@ -1,5 +1,5 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Response, UploadFile, File, Query, Request, Header
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -7,11 +7,14 @@ from starlette.responses import RedirectResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 import os
 import logging
+import hashlib
+import hmac
 from pathlib import Path
 from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
 import re
 import random
+import secrets
 import uuid
 from datetime import datetime, timedelta
 import json
@@ -23,7 +26,14 @@ from database import get_db, init_db, close_db, get_db_type
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
-load_dotenv(ROOT_DIR / 'mail.env')  # SMTP для подтверждения почты
+load_dotenv(ROOT_DIR / 'mail.env')       # SMTP для подтверждения почты
+load_dotenv(ROOT_DIR / 'telegram.env')   # Telegram-бот
+
+# Telegram
+TELEGRAM_BOT_TOKEN    = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@")
+SITE_URL              = os.getenv("SITE_URL", "https://maksum.cryteam.ru").strip()
+TELEGRAM_CODE_EXPIRE_MINUTES = 10
 
 # Create the main app without a prefix
 app = FastAPI()
@@ -55,6 +65,9 @@ def _send_verification_email(to_email: str, code: str) -> bool:
     """Отправляет письмо с кодом подтверждения (не ссылкой). Возвращает True при успехе."""
     if not SMTP_HOST or not to_email or not code:
         return False
+    if smtp_host_looks_placeholder(SMTP_HOST, SMTP_USER, SMTP_PASSWORD):
+        logging.warning("Почта не настроена: в backend/mail.env указаны заглушки (smtp.example.com, your-email). Заполни реальные данные.")
+        return False
     try:
         import smtplib
         from email.mime.text import MIMEText
@@ -66,16 +79,33 @@ def _send_verification_email(to_email: str, code: str) -> bool:
         msg["From"] = MAIL_FROM or SMTP_USER
         msg["To"] = to_email
         msg.attach(MIMEText(body, "plain", "utf-8"))
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as s:
-            if SMTP_PORT in (465, 587):
-                s.starttls()
-            if SMTP_USER and SMTP_PASSWORD:
-                s.login(SMTP_USER, SMTP_PASSWORD)
-            s.sendmail(msg["From"], to_email, msg.as_string())
+        _smtp_timeout = 30
+        if SMTP_PORT == 465:
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=_smtp_timeout) as s:
+                if SMTP_USER and SMTP_PASSWORD:
+                    s.login(SMTP_USER, SMTP_PASSWORD)
+                s.sendmail(msg["From"], to_email, msg.as_string())
+        else:
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=_smtp_timeout) as s:
+                if SMTP_PORT == 587:
+                    s.starttls()
+                if SMTP_USER and SMTP_PASSWORD:
+                    s.login(SMTP_USER, SMTP_PASSWORD)
+                s.sendmail(msg["From"], to_email, msg.as_string())
         return True
     except Exception as e:
         logging.warning("Send verification email failed: %s", e)
         return False
+
+def smtp_host_looks_placeholder(host: str, user: str, password: str) -> bool:
+    """Проверка, что в mail.env не заданы реальные данные."""
+    if not host or "example.com" in host.lower():
+        return True
+    if not user or "your-email" in user.lower() or "example" in user.lower():
+        return True
+    if not password or "ВСТАВЬ" in password or "your-password" in password.lower():
+        return True
+    return False
 
 # Define Models
 class StatusCheck(BaseModel):
@@ -309,6 +339,99 @@ class UserFullProfile(BaseModel):
 # Максимальный limit для пагинации (защита от тяжёлых запросов)
 PAGINATION_MAX_LIMIT = 100
 
+async def _start_telegram_bot():
+    """Запускает Telegram-бот в режиме long-polling внутри того же event loop.
+
+    Используем aiogram 3. Если aiogram не установлен — логируем и выходим.
+    Бот обрабатывает /start <token> и подтверждает аккаунт через внутренний вызов БД.
+    """
+    try:
+        from aiogram import Bot, Dispatcher, types
+        from aiogram.filters import CommandStart, CommandObject
+    except ImportError:
+        logging.warning("aiogram не установлен — Telegram-бот не запущен. pip install aiogram")
+        return
+
+    if not TELEGRAM_BOT_TOKEN:
+        return
+
+    bot = Bot(token=TELEGRAM_BOT_TOKEN)
+    dp  = Dispatcher()
+
+    @dp.message(CommandStart(deep_link=True))
+    async def _on_start_token(message: types.Message, command: CommandObject):
+        token    = (command.args or "").strip()
+        chat_id  = message.from_user.id
+        if not token:
+            await message.answer("Привет! Нажми «Подтвердить через Telegram» на сайте и перейди по ссылке.")
+            return
+        now      = __import__('datetime').datetime.utcnow()
+        db_type  = get_db_type()
+        try:
+            async with get_db() as conn:
+                if db_type == 'postgresql':
+                    row = await conn.fetchrow(
+                        "SELECT id, telegram_verified_at, telegram_token_created_at "
+                        "FROM users WHERE telegram_verification_token=$1", token
+                    )
+                else:
+                    async with conn.execute(
+                        "SELECT id, telegram_verified_at, telegram_token_created_at "
+                        "FROM users WHERE telegram_verification_token=?", (token,)
+                    ) as cur:
+                        r = await cur.fetchone()
+                    row = {"id": r[0], "telegram_verified_at": r[1], "telegram_token_created_at": r[2]} if r else None
+
+                if not row:
+                    await message.answer("Ссылка не найдена или уже использована. Запроси новую на сайте.")
+                    return
+
+                created_at = row["telegram_token_created_at"]
+                if isinstance(created_at, str):
+                    try:
+                        created_at = __import__('datetime').datetime.fromisoformat(created_at)
+                    except Exception:
+                        created_at = None
+                if created_at and (now - created_at).total_seconds() > TELEGRAM_CODE_EXPIRE_MINUTES * 60:
+                    await message.answer(f"Ссылка истекла (действует {TELEGRAM_CODE_EXPIRE_MINUTES} мин). Запроси новую на сайте.")
+                    return
+
+                if row["telegram_verified_at"]:
+                    await message.answer("Аккаунт уже подтверждён ✅")
+                    return
+
+                uid = row["id"]
+                if db_type == 'postgresql':
+                    await conn.execute(
+                        "UPDATE users SET telegram_verified_at=$1, telegram_chat_id=$2, telegram_verification_token=NULL WHERE id=$3",
+                        now, chat_id, uid,
+                    )
+                else:
+                    await conn.execute(
+                        "UPDATE users SET telegram_verified_at=?, telegram_chat_id=?, telegram_verification_token=NULL WHERE id=?",
+                        (now.isoformat(), chat_id, uid),
+                    )
+                    await conn.commit()
+
+            await message.answer("✅ Аккаунт подтверждён! Можешь вернуться на сайт.")
+        except Exception as e:
+            logging.error("Telegram bot confirm error: %s", e)
+            await message.answer("Ошибка сервера. Попробуй позже.")
+
+    @dp.message(CommandStart())
+    async def _on_start(message: types.Message):
+        await message.answer(
+            f"Привет! Я бот подтверждения аккаунтов Maksum.\n\n"
+            f"Зайди на {SITE_URL}, нажми «Подтвердить через Telegram»."
+        )
+
+    logging.info("Telegram-бот запущен (polling)…")
+    try:
+        await dp.start_polling(bot, handle_signals=False)
+    except Exception as e:
+        logging.error("Telegram polling остановлен: %s", e)
+
+
 # Startup event
 @app.on_event("startup")
 async def startup_event():
@@ -317,6 +440,15 @@ async def startup_event():
         logging.warning(
             "JWT_SECRET is default or unset. Set JWT_SECRET in production!"
         )
+    if smtp_host_looks_placeholder(SMTP_HOST, SMTP_USER, SMTP_PASSWORD):
+        logging.warning(
+            "Почта не настроена: заполни backend/mail.env (SMTP_HOST, SMTP_USER, SMTP_PASSWORD). См. backend/КАК_ЗАПОЛНИТЬ_ПОЧТУ.md"
+        )
+    if not TELEGRAM_BOT_TOKEN:
+        logging.warning("Telegram не настроен: нет TELEGRAM_BOT_TOKEN в backend/telegram.env")
+    else:
+        import asyncio as _asyncio
+        _asyncio.create_task(_start_telegram_bot())
     await init_db()
     db_type = get_db_type()
     logging.info(f"Database initialized: {db_type}")
@@ -760,6 +892,196 @@ async def send_verification_code(data: SendVerificationCodeInput):
             await conn.commit()
     ok = _send_verification_email(email, new_code)
     return {"sent": ok}
+
+
+# ===================== Telegram-верификация =====================
+
+class TelegramVerifyStartResponse(BaseModel):
+    token: str
+    bot_username: str
+    expires_in_minutes: int
+
+class TelegramCheckResponse(BaseModel):
+    verified: bool
+    access_token: Optional[str] = None
+    token_type: str = "bearer"
+
+@api_router.post("/auth/telegram-verify-start", response_model=TelegramVerifyStartResponse)
+async def telegram_verify_start(user_id: int = Depends(get_current_user_id)):
+    """Генерируем одноразовый токен, сохраняем в БД и возвращаем ссылку на бота."""
+    token = secrets.token_urlsafe(32)
+    now = datetime.utcnow()
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            await conn.execute(
+                "UPDATE users SET telegram_verification_token=$1, telegram_token_created_at=$2 WHERE id=$3",
+                token, now, user_id
+            )
+        else:
+            await conn.execute(
+                "UPDATE users SET telegram_verification_token=?, telegram_token_created_at=? WHERE id=?",
+                (token, now.isoformat(), user_id)
+            )
+            await conn.commit()
+    return TelegramVerifyStartResponse(
+        token=token,
+        bot_username=TELEGRAM_BOT_USERNAME or "maksumver_bot",
+        expires_in_minutes=TELEGRAM_CODE_EXPIRE_MINUTES,
+    )
+
+@api_router.get("/auth/telegram-verify-check")
+async def telegram_verify_check(user_id: int = Depends(get_current_user_id)):
+    """Фронт опрашивает: подтвердил ли уже пользователь через бота?"""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            row = await conn.fetchrow(
+                "SELECT telegram_verified_at FROM users WHERE id=$1", user_id
+            )
+            verified_at = row["telegram_verified_at"] if row else None
+        else:
+            async with conn.execute(
+                "SELECT telegram_verified_at FROM users WHERE id=?", (user_id,)
+            ) as cur:
+                r = await cur.fetchone()
+            verified_at = r[0] if r else None
+    return {"verified": verified_at is not None}
+
+@api_router.post("/auth/telegram-confirm")
+async def telegram_confirm(request: Request):
+    """Вызывается ботом: подтверждает аккаунт по токену и chat_id.
+    
+    Body: {"token": "...", "chat_id": 123456}
+    """
+    body = await request.json()
+    token   = (body.get("token") or "").strip()
+    chat_id = body.get("chat_id")
+    if not token or not chat_id:
+        raise HTTPException(status_code=400, detail="token и chat_id обязательны")
+    now      = datetime.utcnow()
+    db_type  = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            row = await conn.fetchrow(
+                "SELECT id, telegram_verified_at, telegram_token_created_at FROM users WHERE telegram_verification_token=$1",
+                token,
+            )
+        else:
+            async with conn.execute(
+                "SELECT id, telegram_verified_at, telegram_token_created_at FROM users WHERE telegram_verification_token=?",
+                (token,),
+            ) as cur:
+                r = await cur.fetchone()
+            row = {"id": r[0], "telegram_verified_at": r[1], "telegram_token_created_at": r[2]} if r else None
+        if not row:
+            raise HTTPException(status_code=404, detail="Токен не найден")
+        created_at = row["telegram_token_created_at"]
+        if isinstance(created_at, str):
+            try:
+                created_at = datetime.fromisoformat(created_at)
+            except Exception:
+                created_at = None
+        if created_at and (now - created_at).total_seconds() > TELEGRAM_CODE_EXPIRE_MINUTES * 60:
+            raise HTTPException(status_code=410, detail="Токен истёк")
+        uid = row["id"]
+        if db_type == 'postgresql':
+            await conn.execute(
+                "UPDATE users SET telegram_verified_at=$1, telegram_chat_id=$2, telegram_verification_token=NULL WHERE id=$3",
+                now, chat_id, uid,
+            )
+        else:
+            await conn.execute(
+                "UPDATE users SET telegram_verified_at=?, telegram_chat_id=?, telegram_verification_token=NULL WHERE id=?",
+                (now.isoformat(), chat_id, uid),
+            )
+            await conn.commit()
+    return {"ok": True}
+
+
+@api_router.post("/auth/telegram-webhook")
+async def telegram_webhook(request: Request):
+    """Webhook: Telegram присылает сюда обновления от бота.
+    
+    Ожидаем команду /start <token> в личном сообщении боту.
+    Находим юзера по токену, ставим telegram_verified_at.
+    """
+    if not TELEGRAM_BOT_TOKEN:
+        raise HTTPException(status_code=503, detail="Telegram не настроен")
+    body = await request.json()
+    message = body.get("message") or body.get("edited_message")
+    if not message:
+        return {"ok": True}
+    text: str = message.get("text", "")
+    chat_id: int = message["chat"]["id"]
+    # /start <token>
+    parts = text.strip().split()
+    if len(parts) < 2 or parts[0] != "/start":
+        await _tg_send(chat_id, "Привет! Жди кнопку «Подтвердить через Telegram» на сайте maksum.cryteam.ru и перейди по ссылке.")
+        return {"ok": True}
+    token = parts[1]
+    now = datetime.utcnow()
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            row = await conn.fetchrow(
+                "SELECT id, telegram_verified_at, telegram_token_created_at FROM users WHERE telegram_verification_token=$1",
+                token
+            )
+        else:
+            async with conn.execute(
+                "SELECT id, telegram_verified_at, telegram_token_created_at FROM users WHERE telegram_verification_token=?",
+                (token,)
+            ) as cur:
+                r = await cur.fetchone()
+            if r:
+                row = {"id": r[0], "telegram_verified_at": r[1], "telegram_token_created_at": r[2]}
+            else:
+                row = None
+    if not row:
+        await _tg_send(chat_id, "Ссылка недействительна или устарела. Запроси новую на сайте.")
+        return {"ok": True}
+    # Проверяем срок токена
+    created_at = row["telegram_token_created_at"]
+    if isinstance(created_at, str):
+        try:
+            created_at = datetime.fromisoformat(created_at)
+        except Exception:
+            created_at = None
+    if created_at and (now - created_at).total_seconds() > TELEGRAM_CODE_EXPIRE_MINUTES * 60:
+        await _tg_send(chat_id, f"Ссылка истекла (действует {TELEGRAM_CODE_EXPIRE_MINUTES} мин). Запроси новую на сайте.")
+        return {"ok": True}
+    if row["telegram_verified_at"]:
+        await _tg_send(chat_id, "Аккаунт уже подтверждён ✅")
+        return {"ok": True}
+    # Сохраняем
+    uid = row["id"]
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            await conn.execute(
+                "UPDATE users SET telegram_verified_at=$1, telegram_chat_id=$2, telegram_verification_token=NULL WHERE id=$3",
+                now, chat_id, uid
+            )
+        else:
+            await conn.execute(
+                "UPDATE users SET telegram_verified_at=?, telegram_chat_id=?, telegram_verification_token=NULL WHERE id=?",
+                (now.isoformat(), chat_id, uid)
+            )
+            await conn.commit()
+    await _tg_send(chat_id, "✅ Аккаунт подтверждён! Можешь вернуться на сайт.")
+    return {"ok": True}
+
+async def _tg_send(chat_id: int, text: str):
+    """Отправить сообщение пользователю через Telegram Bot API."""
+    if not TELEGRAM_BOT_TOKEN:
+        return
+    import httpx
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(url, json={"chat_id": chat_id, "text": text})
+    except Exception as e:
+        logging.warning("TG send error: %s", e)
 
 
 # ===================== Users API =====================
