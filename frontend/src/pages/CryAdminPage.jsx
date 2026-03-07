@@ -6,7 +6,8 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { Users, FileText, Building2, Shield, Ban, Trash2, Search, AlertCircle, BarChart3, MessageCircle, Heart, Bell, UserCheck, BadgeCheck, Wrench } from 'lucide-react';
+import { Users, FileText, Building2, Shield, Ban, Trash2, Search, AlertCircle, BarChart3,
+  MessageCircle, Heart, Bell, UserCheck, BadgeCheck, Wrench, Flag, Clock } from 'lucide-react';
 import UserBadges from '../components/Profile/UserBadges';
 
 const CryAdminPage = () => {
@@ -17,10 +18,15 @@ const CryAdminPage = () => {
   const [users, setUsers] = useState([]);
   const [posts, setPosts] = useState([]);
   const [communities, setCommunities] = useState([]);
+  const [reports, setReports] = useState([]);
+  const [banHistory, setBanHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [userSearch, setUserSearch] = useState('');
   const [skip, setSkip] = useState(0);
+  const [banDialog, setBanDialog] = useState(null); // { userId, username }
+  const [banReason, setBanReason] = useState('');
+  const [banExpires, setBanExpires] = useState('');
   const limit = 20;
 
   useEffect(() => {
@@ -89,12 +95,74 @@ const CryAdminPage = () => {
     else if (activeTab === 'users') loadUsers();
     else if (activeTab === 'posts') loadPosts();
     else if (activeTab === 'communities') loadCommunities();
+    else if (activeTab === 'reports') loadReports();
+    else if (activeTab === 'banhistory') loadBanHistory();
   }, [user?.is_admin, activeTab, skip, userSearch]);
 
-  const handleBan = async (userId, banned) => {
+  const loadReports = async () => {
+    setLoading(true);
     try {
-      await api.patch(`/admin/users/${userId}`, { is_banned: banned });
+      const res = await api.get('/admin/reports', { params: { status: 'pending', skip, limit } });
+      setReports(res.data?.reports || []);
+    } catch (e) {
+      setError(e?.response?.data?.detail || 'Ошибка загрузки жалоб');
+    } finally { setLoading(false); }
+  };
+
+  const loadBanHistory = async () => {
+    setLoading(true);
+    try {
+      const res = await api.get('/admin/ban-history', { params: { skip, limit } });
+      setBanHistory(res.data?.ban_history || []);
+    } catch (e) {
+      setError(e?.response?.data?.detail || 'Ошибка загрузки истории банов');
+    } finally { setLoading(false); }
+  };
+
+  const handleBan = async (userId, banned) => {
+    if (banned) {
+      // Открываем диалог расширенного бана
+      const u = users.find(u => u.id === userId);
+      setBanDialog({ userId, username: u?.username || '' });
+      return;
+    }
+    // Разбан
+    try {
+      await api.post(`/admin/users/${userId}/unban`);
       loadUsers();
+    } catch (e) {
+      setError(e?.response?.data?.detail || 'Ошибка');
+    }
+  };
+
+  const handleBanSubmit = async () => {
+    if (!banDialog) return;
+    try {
+      await api.post(`/admin/users/${banDialog.userId}/ban`, {
+        reason: banReason || null,
+        expires_at: banExpires || null,
+      });
+      setBanDialog(null); setBanReason(''); setBanExpires('');
+      loadUsers();
+    } catch (e) {
+      setError(e?.response?.data?.detail || 'Ошибка бана');
+    }
+  };
+
+  const handleDeleteUser = async (userId, username) => {
+    if (!window.confirm(`Удалить пользователя @${username}? Это действие необратимо!`)) return;
+    try {
+      await api.delete(`/admin/users/${userId}`);
+      loadUsers();
+    } catch (e) {
+      setError(e?.response?.data?.detail || 'Ошибка удаления');
+    }
+  };
+
+  const handleReviewReport = async (reportId, status) => {
+    try {
+      await api.patch(`/admin/reports/${reportId}`, { status });
+      loadReports();
     } catch (e) {
       setError(e?.response?.data?.detail || 'Ошибка');
     }
@@ -171,18 +239,24 @@ const CryAdminPage = () => {
         )}
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-          <TabsList className="grid w-full grid-cols-4 bg-gray-200 dark:bg-gray-700">
-            <TabsTrigger value="stats" className="flex items-center gap-2">
-              <BarChart3 className="w-4 h-4" /> Статистика
+          <TabsList className="flex flex-wrap gap-1 h-auto bg-gray-200 dark:bg-gray-700 p-1">
+            <TabsTrigger value="stats" className="flex items-center gap-1 text-xs">
+              <BarChart3 className="w-3 h-3" /> Статистика
             </TabsTrigger>
-            <TabsTrigger value="users" className="flex items-center gap-2">
-              <Users className="w-4 h-4" /> Пользователи
+            <TabsTrigger value="users" className="flex items-center gap-1 text-xs">
+              <Users className="w-3 h-3" /> Пользователи
             </TabsTrigger>
-            <TabsTrigger value="posts" className="flex items-center gap-2">
-              <FileText className="w-4 h-4" /> Модерация постов
+            <TabsTrigger value="posts" className="flex items-center gap-1 text-xs">
+              <FileText className="w-3 h-3" /> Посты
             </TabsTrigger>
-            <TabsTrigger value="communities" className="flex items-center gap-2">
-              <Building2 className="w-4 h-4" /> Сообщества
+            <TabsTrigger value="reports" className="flex items-center gap-1 text-xs">
+              <Flag className="w-3 h-3" /> Жалобы
+            </TabsTrigger>
+            <TabsTrigger value="banhistory" className="flex items-center gap-1 text-xs">
+              <Clock className="w-3 h-3" /> История банов
+            </TabsTrigger>
+            <TabsTrigger value="communities" className="flex items-center gap-1 text-xs">
+              <Building2 className="w-3 h-3" /> Сообщества
             </TabsTrigger>
           </TabsList>
 
@@ -348,7 +422,7 @@ const CryAdminPage = () => {
                               ) : '—'}
                             </td>
                             <td className="py-2">{u.is_banned ? 'Забанен' : '—'}</td>
-                            <td className="py-2 flex gap-2">
+                            <td className="py-2 flex gap-1 flex-wrap">
                               {u.id !== user?.id && (
                                 <>
                                   <Button
@@ -365,7 +439,15 @@ const CryAdminPage = () => {
                                     onClick={() => handleSetAdmin(u.id, !u.is_admin)}
                                   >
                                     <Shield className="w-3 h-3 mr-1" />
-                                    {u.is_admin ? 'Снять админа' : 'Сделать админом'}
+                                    {u.is_admin ? 'Снять' : 'Админ'}
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="destructive"
+                                    onClick={() => handleDeleteUser(u.id, u.username)}
+                                    title="Удалить пользователя"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
                                   </Button>
                                 </>
                               )}
@@ -422,6 +504,95 @@ const CryAdminPage = () => {
             </Card>
           </TabsContent>
 
+          <TabsContent value="reports" className="space-y-4">
+            <Card className="bg-white dark:bg-gray-800">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle>Жалобы (ожидают рассмотрения)</CardTitle>
+                <Button onClick={loadReports}>Обновить</Button>
+              </CardHeader>
+              <CardContent>
+                {loading ? <p className="text-gray-500">Загрузка...</p> : reports.length === 0 ? (
+                  <p className="text-gray-500">Нет новых жалоб</p>
+                ) : (
+                  <div className="space-y-3">
+                    {reports.map((r) => (
+                      <div key={r.id} className="p-3 rounded-lg border dark:border-gray-600 bg-gray-50 dark:bg-gray-700/50">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium">
+                              <span className="text-blue-600">@{r.reporter_username}</span>
+                              {' → '}
+                              <span className="text-amber-600">{r.target_type} #{r.target_id}</span>
+                            </p>
+                            {r.reason && <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">«{r.reason}»</p>}
+                            <p className="text-xs text-gray-400 mt-1">{r.created_at ? new Date(r.created_at).toLocaleString() : ''}</p>
+                          </div>
+                          <div className="flex gap-2 shrink-0">
+                            <Button size="sm" variant="destructive"
+                              onClick={() => handleReviewReport(r.id, 'actioned')}>
+                              Принять
+                            </Button>
+                            <Button size="sm" variant="outline"
+                              onClick={() => handleReviewReport(r.id, 'dismissed')}>
+                              Отклонить
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="banhistory" className="space-y-4">
+            <Card className="bg-white dark:bg-gray-800">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle>История банов</CardTitle>
+                <Button onClick={loadBanHistory}>Обновить</Button>
+              </CardHeader>
+              <CardContent>
+                {loading ? <p className="text-gray-500">Загрузка...</p> : banHistory.length === 0 ? (
+                  <p className="text-gray-500">История пуста</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b dark:border-gray-600">
+                          <th className="text-left py-2">Пользователь</th>
+                          <th className="text-left py-2">Действие</th>
+                          <th className="text-left py-2">Причина</th>
+                          <th className="text-left py-2">До</th>
+                          <th className="text-left py-2">Админ</th>
+                          <th className="text-left py-2">Дата</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {banHistory.map((b) => (
+                          <tr key={b.id} className="border-b dark:border-gray-700">
+                            <td className="py-2 font-medium">@{b.username}</td>
+                            <td className="py-2">
+                              <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                                b.action === 'ban'
+                                  ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+                                  : 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                              }`}>{b.action === 'ban' ? 'Бан' : 'Разбан'}</span>
+                            </td>
+                            <td className="py-2 max-w-xs truncate">{b.reason || '—'}</td>
+                            <td className="py-2 text-xs">{b.expires_at ? new Date(b.expires_at).toLocaleString() : 'Навсегда'}</td>
+                            <td className="py-2 text-xs">@{b.admin_username || '—'}</td>
+                            <td className="py-2 text-xs">{b.created_at ? new Date(b.created_at).toLocaleString() : ''}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
           <TabsContent value="communities" className="space-y-4">
             <Card className="bg-white dark:bg-gray-800">
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -460,6 +631,35 @@ const CryAdminPage = () => {
           </TabsContent>
         </Tabs>
       </div>
+
+      {/* Диалог расширенного бана */}
+      {banDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setBanDialog(null)}>
+          <div className="bg-white dark:bg-gray-800 rounded-xl p-6 w-full max-w-sm shadow-2xl" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-bold mb-4">Забанить @{banDialog.username}</h3>
+            <div className="space-y-3">
+              <div>
+                <label className="text-sm font-medium">Причина</label>
+                <Input placeholder="Укажите причину бана"
+                  value={banReason} onChange={e => setBanReason(e.target.value)} />
+              </div>
+              <div>
+                <label className="text-sm font-medium">Срок до (оставьте пустым = навсегда)</label>
+                <Input type="datetime-local"
+                  value={banExpires} onChange={e => setBanExpires(e.target.value)} />
+              </div>
+              <div className="flex gap-2 pt-2">
+                <Button variant="destructive" className="flex-1" onClick={handleBanSubmit}>
+                  <Ban className="w-4 h-4 mr-1" /> Забанить
+                </Button>
+                <Button variant="outline" className="flex-1" onClick={() => { setBanDialog(null); setBanReason(''); setBanExpires(''); }}>
+                  Отмена
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

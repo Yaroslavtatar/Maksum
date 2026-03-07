@@ -1,16 +1,16 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Home, MessageCircle, Users, Bell, User } from 'lucide-react';
+import { Home, MessageCircle, Bell, User, Building2 } from 'lucide-react';
 
 const MobileNavBar = () => {
   const location = useLocation();
 
   const items = [
-    { to: '/', icon: Home, label: 'Лента' },
-    { to: '/messages', icon: MessageCircle, label: 'Чаты' },
-    { to: '/friends', icon: Users, label: 'Друзья' },
-    { to: '/notifications', icon: Bell, label: 'Сигналы' },
-    { to: '/profile', icon: User, label: 'Профиль' },
+    { to: '/',              icon: Home,          label: 'Лента' },
+    { to: '/messages',      icon: MessageCircle, label: 'Чаты' },
+    { to: '/groups',        icon: Building2,     label: 'Группы' },
+    { to: '/notifications', icon: Bell,          label: 'Сигналы' },
+    { to: '/profile',       icon: User,          label: 'Профиль' },
   ];
 
   return (
@@ -46,4 +46,3 @@ const MobileNavBar = () => {
 };
 
 export default MobileNavBar;
-

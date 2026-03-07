@@ -13,7 +13,8 @@ import {
   Settings,
   HelpCircle,
   UserPlus,
-  Shield
+  Shield,
+  Building2
 } from 'lucide-react';
 
 const Sidebar = ({ onNavigate }) => {
@@ -26,6 +27,7 @@ const Sidebar = ({ onNavigate }) => {
     { icon: MessageCircle, label: 'Сообщения', path: '/messages' },
     { icon: Users, label: 'Друзья', path: '/friends' },
     { icon: UserPlus, label: 'Найти друзей', path: '/find-friends' },
+    { icon: Building2, label: 'Группы', path: '/groups' },
     { icon: Bell, label: 'Уведомления', path: '/notifications' },
     { icon: Music, label: 'Музыка', path: '/music' },
     { icon: ImageIcon, label: 'Медиа', path: '/media' },

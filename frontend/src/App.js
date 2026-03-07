@@ -21,6 +21,8 @@ import UsersPage from "./pages/UsersPage";
 import MediaPage from "./pages/MediaPage";
 import CryAdminPage from "./pages/CryAdminPage";
 import VerifyEmailPage from "./pages/VerifyEmailPage";
+import GroupsPage from "./pages/GroupsPage";
+import GroupPage from "./pages/GroupPage";
 
 const BACKEND_URL = '';
 const API = BACKEND_URL ? `${BACKEND_URL}/api` : '/api';
@@ -154,6 +156,17 @@ function App() {
           <Route path="/cryadmin" element={
             <ProtectedRoute>
               <CryAdminPage />
+            </ProtectedRoute>
+          } />
+
+          <Route path="/groups" element={
+            <ProtectedRoute>
+              <GroupsPage />
+            </ProtectedRoute>
+          } />
+          <Route path="/groups/:slug" element={
+            <ProtectedRoute>
+              <GroupPage />
             </ProtectedRoute>
           } />
 

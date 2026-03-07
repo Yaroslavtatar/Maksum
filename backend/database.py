@@ -358,6 +358,8 @@ async def init_db():
                 await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_chat_id BIGINT NULL")
                 await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_verification_token VARCHAR(64) NULL")
                 await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_token_created_at TIMESTAMP NULL")
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_token VARCHAR(64) NULL")
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_token_created_at TIMESTAMP NULL")
             except Exception:
                 pass
 
@@ -397,6 +399,78 @@ async def init_db():
                 )
             """)
 
+            # Жалобы
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS reports (
+                    id SERIAL PRIMARY KEY,
+                    reporter_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    target_type VARCHAR(20) NOT NULL DEFAULT 'post',
+                    target_id INTEGER NOT NULL,
+                    reason TEXT,
+                    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                    reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                    reviewed_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+
+            # История банов
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS ban_history (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    admin_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                    action VARCHAR(20) NOT NULL DEFAULT 'ban',
+                    reason TEXT,
+                    expires_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+
+            # Группы/сообщества
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS groups (
+                    id SERIAL PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL,
+                    slug VARCHAR(100) UNIQUE NOT NULL,
+                    description TEXT,
+                    avatar_url TEXT,
+                    cover_url TEXT,
+                    is_private BOOLEAN NOT NULL DEFAULT FALSE,
+                    owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS group_members (
+                    group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    role VARCHAR(20) NOT NULL DEFAULT 'member',
+                    joined_at TIMESTAMP DEFAULT NOW(),
+                    PRIMARY KEY (group_id, user_id)
+                )
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS group_join_requests (
+                    id SERIAL PRIMARY KEY,
+                    group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE (group_id, user_id)
+                )
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS group_posts (
+                    id SERIAL PRIMARY KEY,
+                    group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+                    author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    content TEXT,
+                    media_url TEXT,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+
             # Индексы для постов
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author_id)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at)")
@@ -406,6 +480,8 @@ async def init_db():
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_post_tags_tag ON post_tags(tag_id)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_tag_subscriptions_user ON user_tag_subscriptions(user_id)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_tag_subscriptions_tag ON user_tag_subscriptions(tag_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_group_members_group ON group_members(group_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_group_posts_group ON group_posts(group_id)")
             
             # Триггеры для updated_at
             await conn.execute("""
@@ -498,6 +574,89 @@ async def init_db():
                 await conn.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS read_at TIMESTAMP")
                 await conn.execute("INSERT INTO applied_migrations (name) VALUES ($1)", "messages_delivered_read")
                 logger.info("Миграция messages_delivered_read применена")
+
+            # pending_token для верификации без JWT
+            done9 = await conn.fetchval("SELECT 1 FROM applied_migrations WHERE name = $1", "users_pending_token")
+            if done9 is None:
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_token VARCHAR(64) NULL")
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_token_created_at TIMESTAMP NULL")
+                await conn.execute("INSERT INTO applied_migrations (name) VALUES ($1)", "users_pending_token")
+                logger.info("Миграция users_pending_token применена")
+
+            # Жалобы, история банов, группы
+            done10 = await conn.fetchval("SELECT 1 FROM applied_migrations WHERE name = $1", "reports_ban_groups")
+            if done10 is None:
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS reports (
+                        id SERIAL PRIMARY KEY,
+                        reporter_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        target_type VARCHAR(20) NOT NULL DEFAULT 'post',
+                        target_id INTEGER NOT NULL,
+                        reason TEXT,
+                        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                        reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                        reviewed_at TIMESTAMP,
+                        created_at TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS ban_history (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        admin_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                        action VARCHAR(20) NOT NULL DEFAULT 'ban',
+                        reason TEXT,
+                        expires_at TIMESTAMP,
+                        created_at TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS groups (
+                        id SERIAL PRIMARY KEY,
+                        name VARCHAR(255) NOT NULL,
+                        slug VARCHAR(100) UNIQUE NOT NULL,
+                        description TEXT,
+                        avatar_url TEXT,
+                        cover_url TEXT,
+                        is_private BOOLEAN NOT NULL DEFAULT FALSE,
+                        owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        created_at TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS group_members (
+                        group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+                        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        role VARCHAR(20) NOT NULL DEFAULT 'member',
+                        joined_at TIMESTAMP DEFAULT NOW(),
+                        PRIMARY KEY (group_id, user_id)
+                    )
+                """)
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS group_join_requests (
+                        id SERIAL PRIMARY KEY,
+                        group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+                        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        UNIQUE (group_id, user_id)
+                    )
+                """)
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS group_posts (
+                        id SERIAL PRIMARY KEY,
+                        group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+                        author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        content TEXT,
+                        media_url TEXT,
+                        created_at TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_group_members_group ON group_members(group_id)")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id)")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_group_posts_group ON group_posts(group_id)")
+                await conn.execute("INSERT INTO applied_migrations (name) VALUES ($1)", "reports_ban_groups")
+                logger.info("Миграция reports_ban_groups применена")
 
         else:  # SQLite
             # SQLite таблицы
@@ -665,6 +824,10 @@ async def init_db():
                     await conn.execute("ALTER TABLE users ADD COLUMN telegram_verification_token VARCHAR(64) NULL")
                 if 'telegram_token_created_at' not in columns:
                     await conn.execute("ALTER TABLE users ADD COLUMN telegram_token_created_at DATETIME NULL")
+                if 'pending_token' not in columns:
+                    await conn.execute("ALTER TABLE users ADD COLUMN pending_token VARCHAR(64) NULL")
+                if 'pending_token_created_at' not in columns:
+                    await conn.execute("ALTER TABLE users ADD COLUMN pending_token_created_at DATETIME NULL")
             except Exception as e:
                 logger.warning(f"Миграция колонок users: {e}")
 
@@ -775,7 +938,90 @@ async def init_db():
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, is_read)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at)")
 
-            await conn.execute("CREATE TABLE IF NOT EXISTS applied_migrations (name TEXT PRIMARY KEY)")
+            # Жалобы (SQLite)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS reports (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    reporter_id INTEGER NOT NULL,
+                    target_type VARCHAR(20) NOT NULL DEFAULT 'post',
+                    target_id INTEGER NOT NULL,
+                    reason TEXT,
+                    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                    reviewed_by INTEGER,
+                    reviewed_at DATETIME,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (reporter_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+
+            # История банов (SQLite)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS ban_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    admin_id INTEGER,
+                    action VARCHAR(20) NOT NULL DEFAULT 'ban',
+                    reason TEXT,
+                    expires_at DATETIME,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+
+            # Группы (SQLite)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS groups (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name VARCHAR(255) NOT NULL,
+                    slug VARCHAR(100) UNIQUE NOT NULL,
+                    description TEXT,
+                    avatar_url TEXT,
+                    cover_url TEXT,
+                    is_private INTEGER NOT NULL DEFAULT 0,
+                    owner_id INTEGER NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS group_members (
+                    group_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    role VARCHAR(20) NOT NULL DEFAULT 'member',
+                    joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (group_id, user_id),
+                    FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS group_join_requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    group_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (group_id, user_id),
+                    FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS group_posts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    group_id INTEGER NOT NULL,
+                    author_id INTEGER NOT NULL,
+                    content TEXT,
+                    media_url TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+                    FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_group_members_group ON group_members(group_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_group_posts_group ON group_posts(group_id)")
+
             # Одноразовая миграция: выдать админку пользователю durov (hohol@hsahdshd.rf)
             async with conn.execute(
                 "SELECT 1 FROM applied_migrations WHERE name = ?", ("admin_durov",)

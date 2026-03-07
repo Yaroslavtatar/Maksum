@@ -107,10 +107,15 @@ const LoginPage = () => {
       });
       
       if (registerResponse.data) {
-        setSuccess('Регистрация успешна! На вашу почту отправлен код. Введите его на следующей странице.');
+        const pt = registerResponse.data.pending_token;
+        setSuccess('Регистрация успешна! Подтвердите аккаунт через Telegram.');
         setTimeout(() => {
-          navigate('/verify-email', { state: { email: registerData.email.trim().toLowerCase() } });
-        }, 1200);
+          if (pt) {
+            navigate(`/verify-email?t=${encodeURIComponent(pt)}`);
+          } else {
+            navigate('/verify-email', { state: { email: registerData.email.trim().toLowerCase() } });
+          }
+        }, 800);
       }
     } catch (err) {
       const detail = err?.response?.data?.detail;

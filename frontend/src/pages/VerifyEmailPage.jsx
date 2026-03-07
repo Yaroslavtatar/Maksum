@@ -1,13 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Mail, KeyRound, AlertCircle, CheckCircle2, ArrowLeft, Send, Loader2 } from 'lucide-react';
 import api from '../api/axios';
-
-// --- вспомогательные ---
 
 const Alert = ({ type, children }) => {
   const isError = type === 'error';
@@ -44,10 +42,10 @@ const EmailTab = ({ initialEmail }) => {
     setSendLoading(true);
     try {
       await api.post('/auth/send-verification-code', { email: trimmed });
-      setSuccess('Код отправлен на почту. Проверьте почту и введите код.');
+      setSuccess('Код отправлен на почту.');
     } catch (err) {
       const detail = err?.response?.data?.detail;
-      setError(typeof detail === 'string' ? detail : 'Не удалось отправить код. Попробуйте позже.');
+      setError(typeof detail === 'string' ? detail : 'Не удалось отправить код.');
     } finally {
       setSendLoading(false);
     }
@@ -74,7 +72,7 @@ const EmailTab = ({ initialEmail }) => {
       setError('Неверный ответ сервера');
     } catch (err) {
       const detail = err?.response?.data?.detail;
-      setError(typeof detail === 'string' ? detail : 'Неверный код или почта. Запросите новый код.');
+      setError(typeof detail === 'string' ? detail : 'Неверный код или почта.');
     } finally {
       setLoading(false);
     }
@@ -84,38 +82,29 @@ const EmailTab = ({ initialEmail }) => {
     <div className="space-y-4">
       {error   && <Alert type="error">{error}</Alert>}
       {success && <Alert type="success">{success}</Alert>}
-
       <form onSubmit={handleVerify} className="space-y-4">
         <div className="space-y-2">
           <Label htmlFor="verify-email" className="flex items-center gap-2">
             <Mail className="w-4 h-4" /> Электронная почта
           </Label>
-          <Input
-            id="verify-email" type="email" placeholder="example@email.com"
+          <Input id="verify-email" type="email" placeholder="example@email.com"
             value={email} onChange={(e) => setEmail(e.target.value)}
-            disabled={loading} className="h-11"
-          />
+            disabled={loading} className="h-11" />
         </div>
         <div className="space-y-2">
           <Label htmlFor="verify-code">Код из письма</Label>
-          <Input
-            id="verify-code" type="text" inputMode="numeric"
+          <Input id="verify-code" type="text" inputMode="numeric"
             autoComplete="one-time-code" placeholder="123456"
-            value={code}
-            onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+            value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
             maxLength={6} disabled={loading}
-            className="h-11 text-center text-lg tracking-widest font-mono"
-          />
+            className="h-11 text-center text-lg tracking-widest font-mono" />
         </div>
-        <Button
-          type="submit"
+        <Button type="submit"
           className="w-full h-11 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-semibold"
-          disabled={loading}
-        >
+          disabled={loading}>
           {loading ? 'Проверка...' : 'Подтвердить и войти'}
         </Button>
       </form>
-
       <div className="text-center text-sm text-gray-600 dark:text-gray-400">
         Не пришёл код?{' '}
         <Button type="button" variant="link"
@@ -129,50 +118,69 @@ const EmailTab = ({ initialEmail }) => {
 };
 
 // ===================== TELEGRAM TAB =====================
-const TelegramTab = () => {
+const TelegramTab = ({ pendingToken }) => {
   const navigate = useNavigate();
-  const [step, setStep]         = useState('idle'); // idle | waiting | done | error
-  const [botLink, setBotLink]   = useState('');
-  const [error, setError]       = useState('');
-  const [loading, setLoading]   = useState(false);
-  const pollRef                 = useRef(null);
-  const token                   = localStorage.getItem('token');
+  const [step, setStep]       = useState('idle');
+  const [botLink, setBotLink] = useState('');
+  const [error, setError]     = useState('');
+  const [loading, setLoading] = useState(false);
+  const pollRef               = useRef(null);
+
+  // Если есть JWT — используем авторизованные эндпоинты, иначе — анонимные
+  const jwtToken = localStorage.getItem('token');
+  const isAnon   = !jwtToken && !!pendingToken;
 
   const stopPolling = () => {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
   };
-
   useEffect(() => () => stopPolling(), []);
 
-  const startPolling = useCallback(() => {
+  const startPolling = useCallback((pt) => {
     stopPolling();
     pollRef.current = setInterval(async () => {
       try {
-        const res = await api.get('/auth/telegram-verify-check');
-        if (res.data?.verified) {
-          stopPolling();
-          setStep('done');
-          setTimeout(() => navigate('/'), 1500);
+        let res;
+        if (isAnon) {
+          res = await api.get(`/auth/telegram-verify-check-anon?t=${encodeURIComponent(pt)}`);
+          if (res.data?.verified && res.data?.access_token) {
+            stopPolling();
+            localStorage.setItem('token', res.data.access_token);
+            window.dispatchEvent(new Event('maksum:token-set'));
+            setStep('done');
+            setTimeout(() => navigate('/'), 1500);
+          }
+        } else {
+          res = await api.get('/auth/telegram-verify-check');
+          if (res.data?.verified) {
+            stopPolling();
+            setStep('done');
+            setTimeout(() => navigate('/'), 1500);
+          }
         }
       } catch {
         // продолжаем опрос
       }
     }, 3000);
-  }, [navigate]);
+  }, [isAnon, navigate]);
 
   const handleStart = async () => {
-    if (!token) {
-      setError('Для верификации через Telegram сначала войдите в аккаунт.');
+    if (!isAnon && !jwtToken) {
+      setError('Войдите в аккаунт или используйте ссылку из письма регистрации.');
       return;
     }
     setError(''); setLoading(true);
     try {
-      const res = await api.post('/auth/telegram-verify-start');
+      let res;
+      if (isAnon) {
+        res = await api.post('/auth/telegram-verify-start-anon', { pending_token: pendingToken });
+      } else {
+        res = await api.post('/auth/telegram-verify-start');
+      }
       const { token: vToken, bot_username } = res.data;
       const link = `https://t.me/${bot_username}?start=${vToken}`;
       setBotLink(link);
       setStep('waiting');
-      startPolling();
+      startPolling(pendingToken || '');
     } catch (err) {
       const detail = err?.response?.data?.detail;
       setError(typeof detail === 'string' ? detail : 'Не удалось получить ссылку. Попробуйте позже.');
@@ -195,39 +203,32 @@ const TelegramTab = () => {
   return (
     <div className="space-y-4">
       {error && <Alert type="error">{error}</Alert>}
-
       {step === 'idle' && (
         <>
           <p className="text-sm text-gray-600 dark:text-gray-400 text-center">
-            Нажмите кнопку — откроется Telegram‑бот. Напишите ему&nbsp;любое&nbsp;сообщение, и аккаунт будет подтверждён.
+            Нажмите кнопку — откроется Telegram‑бот. Отправьте ему любое сообщение, и аккаунт будет подтверждён.
           </p>
           <Button
             className="w-full h-11 bg-[#2AABEE] hover:bg-[#229ED9] text-white font-semibold flex items-center justify-center gap-2"
-            onClick={handleStart} disabled={loading}
-          >
+            onClick={handleStart} disabled={loading}>
             {loading
               ? <><Loader2 className="w-4 h-4 animate-spin" /> Получение ссылки…</>
               : <><Send className="w-4 h-4" /> Подтвердить через Telegram</>}
           </Button>
         </>
       )}
-
       {step === 'waiting' && (
         <>
           <Alert type="success">
-            Ссылка готова! Перейдите в бот, отправьте любое сообщение. Страница обновится автоматически.
+            Перейдите в бот и отправьте любое сообщение. Страница обновится автоматически.
           </Alert>
-          <a
-            href={botLink} target="_blank" rel="noopener noreferrer"
-            className="block w-full"
-          >
+          <a href={botLink} target="_blank" rel="noopener noreferrer" className="block w-full">
             <Button className="w-full h-11 bg-[#2AABEE] hover:bg-[#229ED9] text-white font-semibold flex items-center justify-center gap-2">
               <Send className="w-4 h-4" /> Открыть Telegram‑бот
             </Button>
           </a>
           <div className="flex items-center justify-center gap-2 text-sm text-gray-500 dark:text-gray-400">
-            <Loader2 className="w-4 h-4 animate-spin" />
-            Ожидание подтверждения…
+            <Loader2 className="w-4 h-4 animate-spin" /> Ожидание подтверждения…
           </div>
           <Button type="button" variant="ghost" className="w-full text-sm"
             onClick={() => { stopPolling(); setStep('idle'); setBotLink(''); }}>
@@ -246,19 +247,22 @@ const TABS = [
 ];
 
 const VerifyEmailPage = () => {
-  const location  = useLocation();
-  const navigate  = useNavigate();
-  const [tab, setTab] = useState('telegram');
+  const location       = useLocation();
+  const navigate       = useNavigate();
+  const [searchParams] = useSearchParams();
+  const [tab, setTab]  = useState('telegram');
 
+  // pending_token из URL (?t=...) — выдаётся после регистрации
+  const pendingToken = searchParams.get('t') || '';
   const initialEmail = location.state?.email || '';
 
-  // Если пришли со страницы регистрации (с email) — покажем вкладку почты
   useEffect(() => {
-    if (initialEmail) setTab('email');
-  }, [initialEmail]);
+    // Если пришли с email (старый flow) — переключаемся на вкладку почты
+    if (initialEmail && !pendingToken) setTab('email');
+  }, [initialEmail, pendingToken]);
 
   return (
-    <div className="min-h-screen min-h-[100dvh] bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 flex items-center justify-center p-4 safe-area-inset-bottom">
+    <div className="min-h-screen min-h-[100dvh] bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         <Card className="bg-white/95 dark:bg-gray-800/95 backdrop-blur-sm shadow-2xl border-0">
           <CardHeader className="text-center pb-4 space-y-4">
@@ -273,28 +277,22 @@ const VerifyEmailPage = () => {
                 Выберите способ подтверждения
               </CardDescription>
             </div>
-
             {/* вкладки */}
             <div className="flex rounded-lg bg-gray-100 dark:bg-gray-700 p-1 gap-1">
               {TABS.map(t => (
-                <button
-                  key={t.id}
-                  onClick={() => setTab(t.id)}
+                <button key={t.id} onClick={() => setTab(t.id)}
                   className={`flex-1 py-1.5 rounded-md text-sm font-medium transition-colors
                     ${tab === t.id
                       ? 'bg-white dark:bg-gray-800 shadow text-gray-900 dark:text-white'
-                      : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}`}
-                >
+                      : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}`}>
                   {t.label}
                 </button>
               ))}
             </div>
           </CardHeader>
-
           <CardContent className="space-y-4">
-            {tab === 'telegram' && <TelegramTab />}
+            {tab === 'telegram' && <TelegramTab pendingToken={pendingToken} />}
             {tab === 'email'    && <EmailTab initialEmail={initialEmail} />}
-
             <Button type="button" variant="ghost" className="w-full gap-2 mt-2"
               onClick={() => navigate('/login')}>
               <ArrowLeft className="w-4 h-4" /> Вернуться к входу

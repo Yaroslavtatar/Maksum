@@ -612,6 +612,7 @@ async def root():
 async def register_user(data: RegisterInput):
     db_type = get_db_type()
     verification_code = _generate_verification_code()
+    pt = secrets.token_urlsafe(32)  # pending_token для Telegram-верификации без JWT
     async with get_db() as conn:
         if db_type == 'postgresql':
             exists = await conn.fetchrow(
@@ -632,18 +633,21 @@ async def register_user(data: RegisterInput):
             pw_hash = hash_password(data.password)
         if db_type == 'postgresql':
             user_id = await conn.fetchval(
-                "INSERT INTO users (username, email, password_hash, email_verification_token, email_verification_sent_at) VALUES ($1, $2, $3, $4, NOW()) RETURNING id",
-                data.username, data.email, pw_hash, verification_code
+                "INSERT INTO users (username, email, password_hash, email_verification_token, email_verification_sent_at, pending_token, pending_token_created_at) "
+                "VALUES ($1, $2, $3, $4, NOW(), $5, NOW()) RETURNING id",
+                data.username, data.email, pw_hash, verification_code, pt
             )
         else:
             cursor = await conn.execute(
-                "INSERT INTO users (username, email, password_hash, email_verification_token, email_verification_sent_at) VALUES (?, ?, ?, ?, datetime('now'))",
-                (data.username, data.email, pw_hash, verification_code)
+                "INSERT INTO users (username, email, password_hash, email_verification_token, email_verification_sent_at, pending_token, pending_token_created_at) "
+                "VALUES (?, ?, ?, ?, datetime('now'), ?, datetime('now'))",
+                (data.username, data.email, pw_hash, verification_code, pt)
             )
             await conn.commit()
             user_id = cursor.lastrowid
     _send_verification_email(data.email, verification_code)
-    return UserPublic(id=user_id, username=data.username, email=data.email, avatar_url=None)
+    # Возвращаем pending_token — фронт редиректит на /verify-email?t=TOKEN
+    return {"id": user_id, "username": data.username, "email": data.email, "avatar_url": None, "pending_token": pt}
 
 def _client_ip(request: Request) -> str:
     xff = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For") or ""
@@ -947,6 +951,99 @@ async def telegram_verify_check(user_id: int = Depends(get_current_user_id)):
                 r = await cur.fetchone()
             verified_at = r[0] if r else None
     return {"verified": verified_at is not None}
+
+
+class TelegramVerifyAnonInput(BaseModel):
+    pending_token: str
+
+
+@api_router.post("/auth/telegram-verify-start-anon", response_model=TelegramVerifyStartResponse)
+async def telegram_verify_start_anon(data: TelegramVerifyAnonInput):
+    """Анонимный старт: принимает pending_token (из URL после регистрации), без JWT.
+    
+    Возвращает telegram-token для ссылки на бота.
+    """
+    pt = (data.pending_token or "").strip()
+    if not pt:
+        raise HTTPException(status_code=400, detail="pending_token обязателен")
+    now = datetime.utcnow()
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            row = await conn.fetchrow(
+                "SELECT id, pending_token_created_at FROM users WHERE pending_token=$1", pt
+            )
+        else:
+            async with conn.execute(
+                "SELECT id, pending_token_created_at FROM users WHERE pending_token=?", (pt,)
+            ) as cur:
+                r = await cur.fetchone()
+            row = {"id": r[0], "pending_token_created_at": r[1]} if r else None
+        if not row:
+            raise HTTPException(status_code=404, detail="Неверный или истёкший pending_token")
+        created_at = row["pending_token_created_at"]
+        if isinstance(created_at, str):
+            try:
+                created_at = datetime.fromisoformat(created_at)
+            except Exception:
+                created_at = None
+        if created_at and (now - created_at).total_seconds() > TELEGRAM_CODE_EXPIRE_MINUTES * 60:
+            raise HTTPException(status_code=410, detail="pending_token истёк. Зарегистрируйтесь заново.")
+        uid = row["id"]
+        tg_token = secrets.token_urlsafe(32)
+        if db_type == 'postgresql':
+            await conn.execute(
+                "UPDATE users SET telegram_verification_token=$1, telegram_token_created_at=$2 WHERE id=$3",
+                tg_token, now, uid
+            )
+        else:
+            await conn.execute(
+                "UPDATE users SET telegram_verification_token=?, telegram_token_created_at=? WHERE id=?",
+                (tg_token, now.isoformat(), uid)
+            )
+            await conn.commit()
+    return TelegramVerifyStartResponse(
+        token=tg_token,
+        bot_username=TELEGRAM_BOT_USERNAME or "maksumver_bot",
+        expires_in_minutes=TELEGRAM_CODE_EXPIRE_MINUTES,
+    )
+
+
+@api_router.get("/auth/telegram-verify-check-anon")
+async def telegram_verify_check_anon(t: str):
+    """Анонимный polling: проверяем подтверждение по pending_token.
+    
+    При успехе возвращает access_token для автологина.
+    """
+    pt = (t or "").strip()
+    if not pt:
+        raise HTTPException(status_code=400, detail="pending_token обязателен")
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            row = await conn.fetchrow(
+                "SELECT id, telegram_verified_at FROM users WHERE pending_token=$1", pt
+            )
+        else:
+            async with conn.execute(
+                "SELECT id, telegram_verified_at FROM users WHERE pending_token=?", (pt,)
+            ) as cur:
+                r = await cur.fetchone()
+            row = {"id": r[0], "telegram_verified_at": r[1]} if r else None
+        if not row:
+            raise HTTPException(status_code=404, detail="pending_token не найден")
+        if not row["telegram_verified_at"]:
+            return {"verified": False, "access_token": None}
+        uid = row["id"]
+        # Очищаем pending_token после успешной верификации
+        if db_type == 'postgresql':
+            await conn.execute("UPDATE users SET pending_token=NULL WHERE id=$1", uid)
+        else:
+            await conn.execute("UPDATE users SET pending_token=NULL WHERE id=?", (uid,))
+            await conn.commit()
+    access_token = create_access_token(uid)
+    return {"verified": True, "access_token": access_token, "token_type": "bearer"}
+
 
 @api_router.post("/auth/telegram-confirm")
 async def telegram_confirm(request: Request):
@@ -3641,6 +3738,716 @@ async def admin_list_communities(
                 rows = await cursor.fetchall()
             out = [{"id": r[0], "username": r[1], "email": r[2], "avatar_url": r[3], "community_name": r[4], "community_description": r[5] if len(r) > 5 else None} for r in rows]
     return {"communities": out, "skip": skip, "limit": limit}
+
+    return {"communities": out, "skip": skip, "limit": limit}
+
+
+# ===================== Admin: удаление юзеров, жалобы, история банов =====================
+
+@api_router.delete("/admin/users/{user_id}")
+async def admin_delete_user(user_id: int, admin_id: int = Depends(get_current_admin)):
+    """Полностью удалить пользователя (каскадно удаляются посты, сообщения, дружбы)."""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            row = await conn.fetchrow("SELECT id FROM users WHERE id=$1", user_id)
+            if not row:
+                raise HTTPException(status_code=404, detail="Пользователь не найден")
+            await conn.execute("DELETE FROM users WHERE id=$1", user_id)
+        else:
+            async with conn.execute("SELECT id FROM users WHERE id=?", (user_id,)) as cur:
+                if not await cur.fetchone():
+                    raise HTTPException(status_code=404, detail="Пользователь не найден")
+            await conn.execute("DELETE FROM users WHERE id=?", (user_id,))
+            await conn.commit()
+    return {"ok": True}
+
+
+class ReportCreate(BaseModel):
+    target_type: str = "post"
+    target_id: int
+    reason: Optional[str] = None
+
+
+@api_router.post("/reports")
+async def create_report(data: ReportCreate, user_id: int = Depends(get_current_user_id)):
+    """Отправить жалобу на пост или комментарий."""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            await conn.execute(
+                "INSERT INTO reports (reporter_id, target_type, target_id, reason) VALUES ($1,$2,$3,$4)",
+                user_id, data.target_type, data.target_id, data.reason
+            )
+        else:
+            await conn.execute(
+                "INSERT INTO reports (reporter_id, target_type, target_id, reason) VALUES (?,?,?,?)",
+                (user_id, data.target_type, data.target_id, data.reason)
+            )
+            await conn.commit()
+    return {"ok": True}
+
+
+@api_router.get("/admin/reports")
+async def admin_list_reports(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=PAGINATION_MAX_LIMIT),
+    status: str = Query("pending"),
+    admin_id: int = Depends(get_current_admin),
+):
+    """Список жалоб для модерации."""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            rows = await conn.fetch(
+                """SELECT r.id, r.target_type, r.target_id, r.reason, r.status, r.created_at,
+                          u.username AS reporter_username
+                   FROM reports r
+                   LEFT JOIN users u ON u.id = r.reporter_id
+                   WHERE r.status = $1 ORDER BY r.created_at DESC LIMIT $2 OFFSET $3""",
+                status, limit, skip
+            )
+            out = [dict(r) for r in rows]
+        else:
+            async with conn.execute(
+                """SELECT r.id, r.target_type, r.target_id, r.reason, r.status, r.created_at,
+                          u.username AS reporter_username
+                   FROM reports r
+                   LEFT JOIN users u ON u.id = r.reporter_id
+                   WHERE r.status = ? ORDER BY r.created_at DESC LIMIT ? OFFSET ?""",
+                (status, limit, skip)
+            ) as cur:
+                rows = await cur.fetchall()
+            out = [{"id": r[0], "target_type": r[1], "target_id": r[2], "reason": r[3],
+                    "status": r[4], "created_at": str(r[5]), "reporter_username": r[6]} for r in rows]
+    return {"reports": out, "skip": skip, "limit": limit}
+
+
+class ReportReview(BaseModel):
+    status: str  # dismissed | actioned
+
+
+@api_router.patch("/admin/reports/{report_id}")
+async def admin_review_report(report_id: int, data: ReportReview, admin_id: int = Depends(get_current_admin)):
+    """Рассмотреть жалобу: dismissed или actioned."""
+    if data.status not in ("dismissed", "actioned"):
+        raise HTTPException(status_code=400, detail="status должен быть dismissed или actioned")
+    now = datetime.utcnow()
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            await conn.execute(
+                "UPDATE reports SET status=$1, reviewed_by=$2, reviewed_at=$3 WHERE id=$4",
+                data.status, admin_id, now, report_id
+            )
+        else:
+            await conn.execute(
+                "UPDATE reports SET status=?, reviewed_by=?, reviewed_at=? WHERE id=?",
+                (data.status, admin_id, now.isoformat(), report_id)
+            )
+            await conn.commit()
+    return {"ok": True}
+
+
+class BanInput(BaseModel):
+    reason: Optional[str] = None
+    expires_at: Optional[str] = None  # ISO datetime или None = перманентный
+
+
+@api_router.post("/admin/users/{user_id}/ban")
+async def admin_ban_user(user_id: int, data: BanInput, admin_id: int = Depends(get_current_admin)):
+    """Забанить пользователя с причиной и сроком; записать в ban_history."""
+    expires = None
+    if data.expires_at:
+        try:
+            expires = datetime.fromisoformat(data.expires_at)
+        except Exception:
+            raise HTTPException(status_code=400, detail="expires_at — невалидный ISO datetime")
+    now = datetime.utcnow()
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            await conn.execute("UPDATE users SET is_banned=TRUE WHERE id=$1", user_id)
+            await conn.execute(
+                "INSERT INTO ban_history (user_id, admin_id, action, reason, expires_at, created_at) VALUES ($1,$2,'ban',$3,$4,$5)",
+                user_id, admin_id, data.reason, expires, now
+            )
+        else:
+            await conn.execute("UPDATE users SET is_banned=1 WHERE id=?", (user_id,))
+            await conn.execute(
+                "INSERT INTO ban_history (user_id, admin_id, action, reason, expires_at, created_at) VALUES (?,?,'ban',?,?,?)",
+                (user_id, admin_id, data.reason, expires.isoformat() if expires else None, now.isoformat())
+            )
+            await conn.commit()
+    return {"ok": True}
+
+
+@api_router.post("/admin/users/{user_id}/unban")
+async def admin_unban_user(user_id: int, admin_id: int = Depends(get_current_admin)):
+    """Разбанить пользователя; записать в ban_history."""
+    now = datetime.utcnow()
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            await conn.execute("UPDATE users SET is_banned=FALSE WHERE id=$1", user_id)
+            await conn.execute(
+                "INSERT INTO ban_history (user_id, admin_id, action, created_at) VALUES ($1,$2,'unban',$3)",
+                user_id, admin_id, now
+            )
+        else:
+            await conn.execute("UPDATE users SET is_banned=0 WHERE id=?", (user_id,))
+            await conn.execute(
+                "INSERT INTO ban_history (user_id, admin_id, action, created_at) VALUES (?,?,'unban',?)",
+                (user_id, admin_id, now.isoformat())
+            )
+            await conn.commit()
+    return {"ok": True}
+
+
+@api_router.get("/admin/ban-history")
+async def admin_ban_history(
+    user_id: Optional[int] = Query(None),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=PAGINATION_MAX_LIMIT),
+    admin_id: int = Depends(get_current_admin),
+):
+    """История банов. Можно фильтровать по user_id."""
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            if user_id:
+                rows = await conn.fetch(
+                    """SELECT bh.id, bh.user_id, u.username, bh.action, bh.reason, bh.expires_at, bh.created_at,
+                              a.username AS admin_username
+                       FROM ban_history bh
+                       LEFT JOIN users u ON u.id = bh.user_id
+                       LEFT JOIN users a ON a.id = bh.admin_id
+                       WHERE bh.user_id=$1 ORDER BY bh.created_at DESC LIMIT $2 OFFSET $3""",
+                    user_id, limit, skip
+                )
+            else:
+                rows = await conn.fetch(
+                    """SELECT bh.id, bh.user_id, u.username, bh.action, bh.reason, bh.expires_at, bh.created_at,
+                              a.username AS admin_username
+                       FROM ban_history bh
+                       LEFT JOIN users u ON u.id = bh.user_id
+                       LEFT JOIN users a ON a.id = bh.admin_id
+                       ORDER BY bh.created_at DESC LIMIT $1 OFFSET $2""",
+                    limit, skip
+                )
+            out = [dict(r) for r in rows]
+        else:
+            q = """SELECT bh.id, bh.user_id, u.username, bh.action, bh.reason, bh.expires_at, bh.created_at,
+                          a.username FROM ban_history bh
+                   LEFT JOIN users u ON u.id=bh.user_id
+                   LEFT JOIN users a ON a.id=bh.admin_id"""
+            params = []
+            if user_id:
+                q += " WHERE bh.user_id=?"
+                params.append(user_id)
+            q += " ORDER BY bh.created_at DESC LIMIT ? OFFSET ?"
+            params += [limit, skip]
+            async with conn.execute(q, params) as cur:
+                rows = await cur.fetchall()
+            out = [{"id": r[0], "user_id": r[1], "username": r[2], "action": r[3],
+                    "reason": r[4], "expires_at": str(r[5]) if r[5] else None,
+                    "created_at": str(r[6]), "admin_username": r[7]} for r in rows]
+    return {"ban_history": out, "skip": skip, "limit": limit}
+
+
+# ===================== Groups API =====================
+
+def _slugify(text: str) -> str:
+    """Простой slugify: оставляем буквы, цифры, дефисы."""
+    import unicodedata
+    text = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode()
+    text = re.sub(r'[^\w\s-]', '', text).strip().lower()
+    return re.sub(r'[\s_]+', '-', text)
+
+
+class GroupCreate(BaseModel):
+    name: str = Field(..., min_length=2, max_length=100)
+    description: Optional[str] = None
+    is_private: bool = False
+
+
+class GroupUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    is_private: Optional[bool] = None
+    avatar_url: Optional[str] = None
+    cover_url: Optional[str] = None
+
+
+def _group_row(r: dict) -> dict:
+    return {
+        "id": r["id"], "name": r["name"], "slug": r["slug"],
+        "description": r.get("description"), "avatar_url": r.get("avatar_url"),
+        "cover_url": r.get("cover_url"), "is_private": bool(r.get("is_private")),
+        "owner_id": r["owner_id"], "created_at": str(r.get("created_at", "")),
+        "members_count": r.get("members_count", 0),
+        "my_role": r.get("my_role"),
+    }
+
+
+async def _get_group_by_slug(conn, slug: str, db_type: str):
+    if db_type == 'postgresql':
+        return await conn.fetchrow("SELECT * FROM groups WHERE slug=$1", slug)
+    else:
+        async with conn.execute("SELECT id,name,slug,description,avatar_url,cover_url,is_private,owner_id,created_at FROM groups WHERE slug=?", (slug,)) as cur:
+            r = await cur.fetchone()
+        if r:
+            return {"id": r[0], "name": r[1], "slug": r[2], "description": r[3],
+                    "avatar_url": r[4], "cover_url": r[5], "is_private": r[6],
+                    "owner_id": r[7], "created_at": r[8]}
+        return None
+
+
+async def _get_member_role(conn, group_id: int, user_id: int, db_type: str):
+    if db_type == 'postgresql':
+        row = await conn.fetchrow("SELECT role FROM group_members WHERE group_id=$1 AND user_id=$2", group_id, user_id)
+    else:
+        async with conn.execute("SELECT role FROM group_members WHERE group_id=? AND user_id=?", (group_id, user_id)) as cur:
+            row = await cur.fetchone()
+        row = {"role": row[0]} if row else None
+    return row["role"] if row else None
+
+
+@api_router.post("/groups")
+async def create_group(data: GroupCreate, user_id: int = Depends(get_current_user_id)):
+    base_slug = _slugify(data.name) or f"group-{user_id}"
+    slug = base_slug
+    db_type = get_db_type()
+    async with get_db() as conn:
+        # Уникальность slug
+        counter = 1
+        while True:
+            if db_type == 'postgresql':
+                exists = await conn.fetchval("SELECT 1 FROM groups WHERE slug=$1", slug)
+            else:
+                async with conn.execute("SELECT 1 FROM groups WHERE slug=?", (slug,)) as cur:
+                    exists = await cur.fetchone()
+            if not exists:
+                break
+            slug = f"{base_slug}-{counter}"
+            counter += 1
+        if db_type == 'postgresql':
+            gid = await conn.fetchval(
+                "INSERT INTO groups (name,slug,description,is_private,owner_id) VALUES($1,$2,$3,$4,$5) RETURNING id",
+                data.name, slug, data.description, data.is_private, user_id
+            )
+            await conn.execute("INSERT INTO group_members (group_id,user_id,role) VALUES($1,$2,'owner')", gid, user_id)
+        else:
+            cur = await conn.execute(
+                "INSERT INTO groups (name,slug,description,is_private,owner_id) VALUES(?,?,?,?,?)",
+                (data.name, slug, data.description, int(data.is_private), user_id)
+            )
+            gid = cur.lastrowid
+            await conn.execute("INSERT INTO group_members (group_id,user_id,role) VALUES(?,?,'owner')", (gid, user_id))
+            await conn.commit()
+    return {"id": gid, "slug": slug, "name": data.name}
+
+
+@api_router.get("/groups")
+async def list_groups(
+    q: Optional[str] = Query(None),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=50),
+    user_id: Optional[int] = Depends(get_current_user_id),
+):
+    db_type = get_db_type()
+    async with get_db() as conn:
+        if db_type == 'postgresql':
+            if q:
+                rows = await conn.fetch(
+                    """SELECT g.*, (SELECT COUNT(*) FROM group_members WHERE group_id=g.id) AS members_count,
+                              (SELECT role FROM group_members WHERE group_id=g.id AND user_id=$3) AS my_role
+                       FROM groups g WHERE g.name ILIKE $1 ORDER BY g.created_at DESC LIMIT $2 OFFSET $4""",
+                    f"%{q}%", limit, user_id, skip
+                )
+            else:
+                rows = await conn.fetch(
+                    """SELECT g.*, (SELECT COUNT(*) FROM group_members WHERE group_id=g.id) AS members_count,
+                              (SELECT role FROM group_members WHERE group_id=g.id AND user_id=$1) AS my_role
+                       FROM groups g ORDER BY g.created_at DESC LIMIT $2 OFFSET $3""",
+                    user_id, limit, skip
+                )
+            out = [_group_row(dict(r)) for r in rows]
+        else:
+            if q:
+                async with conn.execute(
+                    "SELECT id,name,slug,description,avatar_url,cover_url,is_private,owner_id,created_at FROM groups WHERE name LIKE ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                    (f"%{q}%", limit, skip)
+                ) as cur:
+                    rows = await cur.fetchall()
+            else:
+                async with conn.execute(
+                    "SELECT id,name,slug,description,avatar_url,cover_url,is_private,owner_id,created_at FROM groups ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                    (limit, skip)
+                ) as cur:
+                    rows = await cur.fetchall()
+            out = []
+            for r in rows:
+                async with conn.execute("SELECT COUNT(*) FROM group_members WHERE group_id=?", (r[0],)) as mc:
+                    cnt = (await mc.fetchone())[0]
+                async with conn.execute("SELECT role FROM group_members WHERE group_id=? AND user_id=?", (r[0], user_id)) as rc:
+                    role_row = await rc.fetchone()
+                out.append({"id": r[0], "name": r[1], "slug": r[2], "description": r[3],
+                             "avatar_url": r[4], "cover_url": r[5], "is_private": bool(r[6]),
+                             "owner_id": r[7], "created_at": str(r[8]),
+                             "members_count": cnt, "my_role": role_row[0] if role_row else None})
+    return {"groups": out}
+
+
+@api_router.get("/groups/{slug}")
+async def get_group(slug: str, user_id: Optional[int] = Depends(get_current_user_id)):
+    db_type = get_db_type()
+    async with get_db() as conn:
+        g = await _get_group_by_slug(conn, slug, db_type)
+        if not g:
+            raise HTTPException(status_code=404, detail="Группа не найдена")
+        gid = g["id"]
+        if db_type == 'postgresql':
+            cnt = await conn.fetchval("SELECT COUNT(*) FROM group_members WHERE group_id=$1", gid)
+            my_role = await _get_member_role(conn, gid, user_id, db_type) if user_id else None
+        else:
+            async with conn.execute("SELECT COUNT(*) FROM group_members WHERE group_id=?", (gid,)) as mc:
+                cnt = (await mc.fetchone())[0]
+            my_role = await _get_member_role(conn, gid, user_id, db_type) if user_id else None
+        info = _group_row({**dict(g), "members_count": cnt, "my_role": my_role})
+    return info
+
+
+@api_router.patch("/groups/{slug}")
+async def update_group(slug: str, data: GroupUpdate, user_id: int = Depends(get_current_user_id)):
+    db_type = get_db_type()
+    async with get_db() as conn:
+        g = await _get_group_by_slug(conn, slug, db_type)
+        if not g:
+            raise HTTPException(status_code=404, detail="Группа не найдена")
+        role = await _get_member_role(conn, g["id"], user_id, db_type)
+        if role not in ("owner", "moderator"):
+            raise HTTPException(status_code=403, detail="Нет прав")
+        fields = {k: v for k, v in data.model_dump().items() if v is not None}
+        if not fields:
+            return {"ok": True}
+        gid = g["id"]
+        if db_type == 'postgresql':
+            parts = [f"{k}=${i+1}" for i, k in enumerate(fields)]
+            vals = list(fields.values()) + [gid]
+            await conn.execute(f"UPDATE groups SET {', '.join(parts)} WHERE id=${len(vals)}", *vals)
+        else:
+            parts = [f"{k}=?" for k in fields]
+            vals = list(fields.values()) + [gid]
+            await conn.execute(f"UPDATE groups SET {', '.join(parts)} WHERE id=?", vals)
+            await conn.commit()
+    return {"ok": True}
+
+
+@api_router.post("/groups/{slug}/join")
+async def join_group(slug: str, user_id: int = Depends(get_current_user_id)):
+    db_type = get_db_type()
+    async with get_db() as conn:
+        g = await _get_group_by_slug(conn, slug, db_type)
+        if not g:
+            raise HTTPException(status_code=404, detail="Группа не найдена")
+        gid = g["id"]
+        role = await _get_member_role(conn, gid, user_id, db_type)
+        if role:
+            raise HTTPException(status_code=400, detail="Вы уже состоите в группе")
+        if not g["is_private"]:
+            if db_type == 'postgresql':
+                await conn.execute("INSERT INTO group_members (group_id,user_id,role) VALUES($1,$2,'member') ON CONFLICT DO NOTHING", gid, user_id)
+            else:
+                await conn.execute("INSERT OR IGNORE INTO group_members (group_id,user_id,role) VALUES(?,?,'member')", (gid, user_id))
+                await conn.commit()
+            return {"status": "joined"}
+        else:
+            if db_type == 'postgresql':
+                await conn.execute(
+                    "INSERT INTO group_join_requests (group_id,user_id,status) VALUES($1,$2,'pending') ON CONFLICT DO NOTHING",
+                    gid, user_id
+                )
+            else:
+                await conn.execute(
+                    "INSERT OR IGNORE INTO group_join_requests (group_id,user_id,status) VALUES(?,?,'pending')",
+                    (gid, user_id)
+                )
+                await conn.commit()
+            return {"status": "pending"}
+
+
+@api_router.delete("/groups/{slug}/leave")
+async def leave_group(slug: str, user_id: int = Depends(get_current_user_id)):
+    db_type = get_db_type()
+    async with get_db() as conn:
+        g = await _get_group_by_slug(conn, slug, db_type)
+        if not g:
+            raise HTTPException(status_code=404, detail="Группа не найдена")
+        gid = g["id"]
+        if g["owner_id"] == user_id:
+            raise HTTPException(status_code=400, detail="Владелец не может покинуть группу. Передайте владение или удалите группу.")
+        if db_type == 'postgresql':
+            await conn.execute("DELETE FROM group_members WHERE group_id=$1 AND user_id=$2", gid, user_id)
+        else:
+            await conn.execute("DELETE FROM group_members WHERE group_id=? AND user_id=?", (gid, user_id))
+            await conn.commit()
+    return {"ok": True}
+
+
+@api_router.get("/groups/{slug}/members")
+async def group_members(slug: str, user_id: Optional[int] = Depends(get_current_user_id)):
+    db_type = get_db_type()
+    async with get_db() as conn:
+        g = await _get_group_by_slug(conn, slug, db_type)
+        if not g:
+            raise HTTPException(status_code=404, detail="Группа не найдена")
+        gid = g["id"]
+        if db_type == 'postgresql':
+            rows = await conn.fetch(
+                """SELECT u.id, u.username, u.avatar_url, gm.role, gm.joined_at
+                   FROM group_members gm JOIN users u ON u.id=gm.user_id
+                   WHERE gm.group_id=$1 ORDER BY gm.joined_at""",
+                gid
+            )
+            out = [dict(r) for r in rows]
+        else:
+            async with conn.execute(
+                """SELECT u.id, u.username, u.avatar_url, gm.role, gm.joined_at
+                   FROM group_members gm JOIN users u ON u.id=gm.user_id
+                   WHERE gm.group_id=? ORDER BY gm.joined_at""",
+                (gid,)
+            ) as cur:
+                rows = await cur.fetchall()
+            out = [{"id": r[0], "username": r[1], "avatar_url": r[2], "role": r[3], "joined_at": str(r[4])} for r in rows]
+    return {"members": out}
+
+
+@api_router.get("/groups/{slug}/requests")
+async def group_join_requests(slug: str, user_id: int = Depends(get_current_user_id)):
+    db_type = get_db_type()
+    async with get_db() as conn:
+        g = await _get_group_by_slug(conn, slug, db_type)
+        if not g:
+            raise HTTPException(status_code=404, detail="Группа не найдена")
+        role = await _get_member_role(conn, g["id"], user_id, db_type)
+        if role not in ("owner", "moderator"):
+            raise HTTPException(status_code=403, detail="Нет прав")
+        gid = g["id"]
+        if db_type == 'postgresql':
+            rows = await conn.fetch(
+                """SELECT jr.id, u.id AS user_id, u.username, u.avatar_url, jr.status, jr.created_at
+                   FROM group_join_requests jr JOIN users u ON u.id=jr.user_id
+                   WHERE jr.group_id=$1 AND jr.status='pending' ORDER BY jr.created_at""",
+                gid
+            )
+            out = [dict(r) for r in rows]
+        else:
+            async with conn.execute(
+                """SELECT jr.id, u.id, u.username, u.avatar_url, jr.status, jr.created_at
+                   FROM group_join_requests jr JOIN users u ON u.id=jr.user_id
+                   WHERE jr.group_id=? AND jr.status='pending' ORDER BY jr.created_at""",
+                (gid,)
+            ) as cur:
+                rows = await cur.fetchall()
+            out = [{"id": r[0], "user_id": r[1], "username": r[2], "avatar_url": r[3], "status": r[4], "created_at": str(r[5])} for r in rows]
+    return {"requests": out}
+
+
+class JoinRequestAction(BaseModel):
+    action: str  # accept | reject
+
+
+@api_router.patch("/groups/{slug}/requests/{request_id}")
+async def review_join_request(slug: str, request_id: int, data: JoinRequestAction, user_id: int = Depends(get_current_user_id)):
+    if data.action not in ("accept", "reject"):
+        raise HTTPException(status_code=400, detail="action: accept или reject")
+    db_type = get_db_type()
+    async with get_db() as conn:
+        g = await _get_group_by_slug(conn, slug, db_type)
+        if not g:
+            raise HTTPException(status_code=404, detail="Группа не найдена")
+        role = await _get_member_role(conn, g["id"], user_id, db_type)
+        if role not in ("owner", "moderator"):
+            raise HTTPException(status_code=403, detail="Нет прав")
+        gid = g["id"]
+        if db_type == 'postgresql':
+            row = await conn.fetchrow("SELECT user_id FROM group_join_requests WHERE id=$1 AND group_id=$2", request_id, gid)
+        else:
+            async with conn.execute("SELECT user_id FROM group_join_requests WHERE id=? AND group_id=?", (request_id, gid)) as cur:
+                r = await cur.fetchone()
+            row = {"user_id": r[0]} if r else None
+        if not row:
+            raise HTTPException(status_code=404, detail="Заявка не найдена")
+        req_user_id = row["user_id"]
+        new_status = "accepted" if data.action == "accept" else "rejected"
+        if db_type == 'postgresql':
+            await conn.execute("UPDATE group_join_requests SET status=$1 WHERE id=$2", new_status, request_id)
+            if data.action == "accept":
+                await conn.execute("INSERT INTO group_members (group_id,user_id,role) VALUES($1,$2,'member') ON CONFLICT DO NOTHING", gid, req_user_id)
+        else:
+            await conn.execute("UPDATE group_join_requests SET status=? WHERE id=?", (new_status, request_id))
+            if data.action == "accept":
+                await conn.execute("INSERT OR IGNORE INTO group_members (group_id,user_id,role) VALUES(?,?,'member')", (gid, req_user_id))
+            await conn.commit()
+    return {"ok": True}
+
+
+@api_router.patch("/groups/{slug}/members/{target_user_id}")
+async def update_member_role(slug: str, target_user_id: int, role: str, user_id: int = Depends(get_current_user_id)):
+    if role not in ("member", "moderator"):
+        raise HTTPException(status_code=400, detail="role: member или moderator")
+    db_type = get_db_type()
+    async with get_db() as conn:
+        g = await _get_group_by_slug(conn, slug, db_type)
+        if not g:
+            raise HTTPException(status_code=404, detail="Группа не найдена")
+        if g["owner_id"] != user_id:
+            raise HTTPException(status_code=403, detail="Только владелец может менять роли")
+        gid = g["id"]
+        if db_type == 'postgresql':
+            await conn.execute("UPDATE group_members SET role=$1 WHERE group_id=$2 AND user_id=$3", role, gid, target_user_id)
+        else:
+            await conn.execute("UPDATE group_members SET role=? WHERE group_id=? AND user_id=?", (role, gid, target_user_id))
+            await conn.commit()
+    return {"ok": True}
+
+
+@api_router.delete("/groups/{slug}/members/{target_user_id}")
+async def kick_member(slug: str, target_user_id: int, user_id: int = Depends(get_current_user_id)):
+    db_type = get_db_type()
+    async with get_db() as conn:
+        g = await _get_group_by_slug(conn, slug, db_type)
+        if not g:
+            raise HTTPException(status_code=404, detail="Группа не найдена")
+        role = await _get_member_role(conn, g["id"], user_id, db_type)
+        if role not in ("owner", "moderator"):
+            raise HTTPException(status_code=403, detail="Нет прав")
+        if target_user_id == g["owner_id"]:
+            raise HTTPException(status_code=400, detail="Нельзя исключить владельца")
+        gid = g["id"]
+        if db_type == 'postgresql':
+            await conn.execute("DELETE FROM group_members WHERE group_id=$1 AND user_id=$2", gid, target_user_id)
+        else:
+            await conn.execute("DELETE FROM group_members WHERE group_id=? AND user_id=?", (gid, target_user_id))
+            await conn.commit()
+    return {"ok": True}
+
+
+@api_router.post("/groups/{slug}/posts")
+async def create_group_post(slug: str, content: str = None, media_url: str = None, user_id: int = Depends(get_current_user_id), request: Request = None):
+    if request:
+        try:
+            body = await request.json()
+            content = body.get("content", content)
+            media_url = body.get("media_url", media_url)
+        except Exception:
+            pass
+    db_type = get_db_type()
+    async with get_db() as conn:
+        g = await _get_group_by_slug(conn, slug, db_type)
+        if not g:
+            raise HTTPException(status_code=404, detail="Группа не найдена")
+        role = await _get_member_role(conn, g["id"], user_id, db_type)
+        if not role:
+            raise HTTPException(status_code=403, detail="Вы не состоите в группе")
+        gid = g["id"]
+        if db_type == 'postgresql':
+            pid = await conn.fetchval(
+                "INSERT INTO group_posts (group_id,author_id,content,media_url) VALUES($1,$2,$3,$4) RETURNING id",
+                gid, user_id, content, media_url
+            )
+        else:
+            cur = await conn.execute(
+                "INSERT INTO group_posts (group_id,author_id,content,media_url) VALUES(?,?,?,?)",
+                (gid, user_id, content, media_url)
+            )
+            pid = cur.lastrowid
+            await conn.commit()
+    return {"id": pid, "group_id": gid}
+
+
+@api_router.get("/groups/{slug}/posts")
+async def get_group_posts(
+    slug: str,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=50),
+    user_id: Optional[int] = Depends(get_current_user_id),
+):
+    db_type = get_db_type()
+    async with get_db() as conn:
+        g = await _get_group_by_slug(conn, slug, db_type)
+        if not g:
+            raise HTTPException(status_code=404, detail="Группа не найдена")
+        gid = g["id"]
+        if g["is_private"]:
+            role = await _get_member_role(conn, gid, user_id, db_type) if user_id else None
+            if not role:
+                raise HTTPException(status_code=403, detail="Группа закрытая")
+        if db_type == 'postgresql':
+            rows = await conn.fetch(
+                """SELECT gp.id, gp.content, gp.media_url, gp.created_at,
+                          u.id AS author_id, u.username AS author_username, u.avatar_url AS author_avatar
+                   FROM group_posts gp JOIN users u ON u.id=gp.author_id
+                   WHERE gp.group_id=$1 ORDER BY gp.created_at DESC LIMIT $2 OFFSET $3""",
+                gid, limit, skip
+            )
+            out = [dict(r) for r in rows]
+        else:
+            async with conn.execute(
+                """SELECT gp.id, gp.content, gp.media_url, gp.created_at,
+                          u.id, u.username, u.avatar_url
+                   FROM group_posts gp JOIN users u ON u.id=gp.author_id
+                   WHERE gp.group_id=? ORDER BY gp.created_at DESC LIMIT ? OFFSET ?""",
+                (gid, limit, skip)
+            ) as cur:
+                rows = await cur.fetchall()
+            out = [{"id": r[0], "content": r[1], "media_url": r[2], "created_at": str(r[3]),
+                    "author_id": r[4], "author_username": r[5], "author_avatar": r[6]} for r in rows]
+    return {"posts": out, "group": {"id": gid, "name": g["name"], "slug": g["slug"]}}
+
+
+@api_router.delete("/groups/{slug}/posts/{post_id}")
+async def delete_group_post(slug: str, post_id: int, user_id: int = Depends(get_current_user_id)):
+    db_type = get_db_type()
+    async with get_db() as conn:
+        g = await _get_group_by_slug(conn, slug, db_type)
+        if not g:
+            raise HTTPException(status_code=404, detail="Группа не найдена")
+        role = await _get_member_role(conn, g["id"], user_id, db_type)
+        if db_type == 'postgresql':
+            post = await conn.fetchrow("SELECT author_id FROM group_posts WHERE id=$1 AND group_id=$2", post_id, g["id"])
+        else:
+            async with conn.execute("SELECT author_id FROM group_posts WHERE id=? AND group_id=?", (post_id, g["id"])) as cur:
+                pr = await cur.fetchone()
+            post = {"author_id": pr[0]} if pr else None
+        if not post:
+            raise HTTPException(status_code=404, detail="Пост не найден")
+        if post["author_id"] != user_id and role not in ("owner", "moderator"):
+            raise HTTPException(status_code=403, detail="Нет прав")
+        if db_type == 'postgresql':
+            await conn.execute("DELETE FROM group_posts WHERE id=$1", post_id)
+        else:
+            await conn.execute("DELETE FROM group_posts WHERE id=?", (post_id,))
+            await conn.commit()
+    return {"ok": True}
+
+
+@api_router.delete("/groups/{slug}")
+async def delete_group(slug: str, user_id: int = Depends(get_current_user_id)):
+    db_type = get_db_type()
+    async with get_db() as conn:
+        g = await _get_group_by_slug(conn, slug, db_type)
+        if not g:
+            raise HTTPException(status_code=404, detail="Группа не найдена")
+        if g["owner_id"] != user_id:
+            raise HTTPException(status_code=403, detail="Только владелец может удалить группу")
+        if db_type == 'postgresql':
+            await conn.execute("DELETE FROM groups WHERE id=$1", g["id"])
+        else:
+            await conn.execute("DELETE FROM groups WHERE id=?", (g["id"],))
+            await conn.commit()
+    return {"ok": True}
 
 
 # ===================== Health (для мониторинга и load balancer) =====================
